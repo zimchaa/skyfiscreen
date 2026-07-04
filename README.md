@@ -44,7 +44,21 @@ sudo apt update && sudo apt install -y cmake ninja-build build-essential \
    ```
    The Presto reboots into the new firmware automatically.
 
-Serial debug output (`printf`) is available over USB at `/dev/ttyACM0`.
+Serial debug output (`printf`) is available over USB at `/dev/ttyACM*` (the
+number can change across replug cycles).
+
+## Local patches to dependencies
+
+The `lib/` clones are not committed; anything we fix in them lives in `patches/`
+and must be re-applied after a fresh clone:
+
+- **`patches/st7701-start-frame-xfer-hang.patch`** (required): fixes a hang in
+  Pimoroni's ST7701 driver — `start_frame_xfer()` exec'd an `out` on the
+  parallel PIO SM while its FIFO was empty (autopull enabled), which latches
+  EXEC_STALLED forever; `pio_sm_exec_wait_blocking()` then spins inside the
+  scanout ISR and freezes the display core, leaving the panel blank. Replaced
+  with `pio_sm_restart()` + a non-blocking `jmp`. Worth upstreaming to
+  pimoroni/presto. Apply with: `git -C lib/presto apply ../../patches/st7701-start-frame-xfer-hang.patch`
 
 ## Phases
 
