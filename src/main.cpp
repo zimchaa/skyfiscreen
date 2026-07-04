@@ -1,14 +1,9 @@
-// SkyFi Screen — Phase 0: display bring-up
+// SkyFi Screen — Phase 1: LVGL port + peripherals
 //
-// Architecture (mirrors the shipping MicroPython firmware):
-//   core1 — owns the ST7701 display: init() runs there, so the PIO scanout
-//           IRQs (timing feed + end-of-line/frame) are serviced on core1.
-//   core0 — application: renders with PicoGraphics and calls update(), which
-//           copies the front buffer into the scanout back buffer racing the
-//           beam. From Phase 1 this is where LVGL lives.
-//
-// Note: requires the start_frame_xfer() fix in lib/presto's ST7701 driver
-// (see patches/) — without it the first frame boundary hangs the display core.
+// core1 owns the ST7701 display (init + scanout IRQs); core0 runs LVGL.
+// Demo screen: a button that beeps the buzzer and pulses the ambient LEDs,
+// a live touch-coordinate readout, and a backlight slider — proving display,
+// touch, buzzer, RGB LEDs and backlight all work through LVGL.
 
 #include "libraries/pico_graphics/pico_graphics.hpp"
 #include "drivers/st7701/st7701.hpp"
@@ -16,6 +11,10 @@
 #include "pico/multicore.h"
 #include "hardware/clocks.h"
 #include <cstdio>
+
+#include "lvgl.h"
+#include "lvgl_port.hpp"
+#include "peripherals.hpp"
 
 using namespace pimoroni;
 
@@ -41,12 +40,68 @@ static void core1_entry() {
     }
 }
 
+// ── Phase 1 demo UI ──────────────────────────────────────────────────
+
+static lv_obj_t* touch_label = nullptr;
+
+static void beep_btn_event(lv_event_t* e) {
+    (void)e;
+    buzzer_beep(880, 120);
+    leds_pulse(0, 120, 160);   // cyan flash, fades out in peripherals_task()
+}
+
+static void backlight_slider_event(lv_event_t* e) {
+    lv_obj_t* slider = (lv_obj_t*)lv_event_get_target(e);
+    int32_t v = lv_slider_get_value(slider);   // 10..100
+    g_presto->set_backlight((uint8_t)(v * 255 / 100));
+}
+
+static void build_demo_ui() {
+    lv_obj_t* scr = lv_screen_active();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x0b0f1a), 0);
+
+    lv_obj_t* title = lv_label_create(scr);
+    lv_label_set_text(title, "SkyFi Screen — Phase 1");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xe6ecff), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+    lv_obj_t* btn = lv_button_create(scr);
+    lv_obj_set_size(btn, 160, 70);
+    lv_obj_align(btn, LV_ALIGN_CENTER, 0, -20);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0xe60000), 0);
+    lv_obj_add_event_cb(btn, beep_btn_event, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t* btn_label = lv_label_create(btn);
+    lv_label_set_text(btn_label, "BEEP");
+    lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_28, 0);
+    lv_obj_center(btn_label);
+
+    lv_obj_t* slider = lv_slider_create(scr);
+    lv_obj_set_width(slider, 180);
+    lv_obj_align(slider, LV_ALIGN_CENTER, 0, 55);
+    lv_slider_set_range(slider, 10, 100);
+    lv_slider_set_value(slider, 100, LV_ANIM_OFF);
+    lv_obj_add_event_cb(slider, backlight_slider_event, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    touch_label = lv_label_create(scr);
+    lv_label_set_text(touch_label, "touch: —");
+    lv_obj_set_style_text_color(touch_label, lv_color_hex(0x8a93a6), 0);
+    lv_obj_align(touch_label, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    // Refresh the coordinate readout a few times a second
+    lv_timer_create([](lv_timer_t*) {
+        uint16_t x, y;
+        if (lvgl_port_touch_state(&x, &y)) {
+            lv_label_set_text_fmt(touch_label, "touch: %u, %u", x, y);
+        }
+    }, 100, nullptr);
+}
+
 int main() {
-    // No set_sys_clock_khz(): the `presto` board header applies its tuned
-    // 200MHz PLL at boot, which the ST7701 display timing was validated on.
     stdio_init_all();
 
-    printf("\n=== SkyFi Screen — Phase 0 ===\n");
+    printf("\n=== SkyFi Screen — Phase 1 (LVGL) ===\n");
     printf("sys_clk = %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));
 
     gpio_init(LCD_CS);
@@ -62,32 +117,15 @@ int main() {
     multicore_launch_core1(core1_entry);
     multicore_fifo_pop_blocking();
     presto.set_backlight(255);
-    printf("display up, entering render loop\n");
 
-    struct { const char* name; uint8_t r, g, b; } colours[] = {
-        {"RED",   255, 0,   0},
-        {"GREEN", 0,   255, 0},
-        {"BLUE",  0,   0,   255},
-        {"WHITE", 255, 255, 255},
-        {"NAVY",  11,  15,  26},
-    };
+    peripherals_init();
+    lvgl_port_init(&presto, &gfx);
+    build_demo_ui();
+    printf("LVGL up, entering main loop\n");
 
-    uint32_t frame = 0;
     while (true) {
-        auto& c = colours[frame % 5];
-        gfx.set_pen(gfx.create_pen(c.r, c.g, c.b));
-        gfx.clear();
-        gfx.set_pen(gfx.create_pen(0, 0, 0));
-        gfx.text("SkyFi Screen", {20, 20}, FRAME_WIDTH, 3);
-        gfx.text(c.name, {20, 60}, FRAME_WIDTH, 4);
-        gfx.set_pen(gfx.create_pen(255, 255, 255));
-        gfx.text("SkyFi Screen", {21, 21}, FRAME_WIDTH, 3);
-        gfx.text(c.name, {22, 62}, FRAME_WIDTH, 4);
-
-        presto.update(&gfx);
-
-        printf("frame %lu -> %s\n", (unsigned long)frame, c.name);
-        frame++;
-        sleep_ms(800);
+        uint32_t wait_ms = lv_timer_handler();
+        peripherals_task();
+        sleep_ms(wait_ms > 10 ? 10 : wait_ms);
     }
 }

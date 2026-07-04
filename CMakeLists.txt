@@ -41,18 +41,36 @@ list(APPEND CMAKE_MODULE_PATH ${PIMORONI_PRESTO_PATH})
 include(common/pimoroni_bus)
 include(libraries/pico_graphics/pico_graphics)
 include(drivers/st7701/st7701_presto)
+include(drivers/plasma/plasma)          # WS2812 ambient LEDs
+
+# ─── LVGL ────────────────────────────────────────────────────────────
+set(LV_CONF_PATH ${CMAKE_CURRENT_LIST_DIR}/lv_conf.h)
+set(LV_CONF_BUILD_DISABLE_EXAMPLES ON CACHE BOOL "" FORCE)
+set(LV_CONF_BUILD_DISABLE_DEMOS ON CACHE BOOL "" FORCE)
+add_subdirectory(lib/lvgl)
 
 # ─── Application ─────────────────────────────────────────────────────
 add_executable(${NAME}
     src/main.cpp
+    src/lvgl_port.cpp
+    src/peripherals.cpp
+)
+
+target_include_directories(${NAME} PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/lib/lvgl
+    ${PIMORONI_PICO_PATH}/drivers/plasma
 )
 
 target_link_libraries(${NAME}
     st7701_presto
+    lvgl
+    plasma
     pico_stdlib
     pico_multicore
     pico_graphics
     hardware_interp
+    hardware_i2c
+    hardware_pwm
 )
 
 # ─── Outputs / stdio ─────────────────────────────────────────────────
