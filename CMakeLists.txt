@@ -54,6 +54,8 @@ add_executable(${NAME}
     src/main.cpp
     src/lvgl_port.cpp
     src/peripherals.cpp
+    src/mock_data.cpp
+    ui/ui_panel.cpp
 )
 
 target_include_directories(${NAME} PRIVATE
@@ -67,6 +69,7 @@ target_link_libraries(${NAME}
     plasma
     pico_stdlib
     pico_multicore
+    pico_rand
     pico_graphics
     hardware_interp
     hardware_i2c
