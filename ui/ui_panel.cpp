@@ -39,9 +39,13 @@ static uint32_t s_press_start = 0;
 static bool s_landing = false;
 static uint32_t s_landing_until = 0;
 static int s_beeps_left = 0;
+static uint32_t s_beep_freq = 1760;
 static uint32_t s_next_beep_at = 0;
 static bool s_led_flash_on = false;
 static uint32_t s_next_led_flip = 0;
+static bool (*s_land_handler)() = nullptr;
+
+void ui_panel_set_land_handler(bool (*handler)()) { s_land_handler = handler; }
 
 // Last status set by the app, so we can restore it after a landing alert.
 static char s_status_text[24] = "STARTING";
@@ -81,18 +85,50 @@ static void land_reset_visuals() {
     lv_obj_set_style_bg_color(s_land_btn, theme::red(), 0);
 }
 
-static void land_trigger() {
-    s_pressing = false;
-    s_landing = true;
+static void land_alert(const char* text, int beeps, uint32_t beep_freq, uint32_t show_ms) {
     uint32_t now = lv_tick_get();
-    s_landing_until = now + LANDING_SHOW_MS;
-    s_beeps_left = 3;
+    s_landing = true;
+    s_landing_until = now + show_ms;
+    s_beeps_left = beeps;
+    s_beep_freq = beep_freq;
     s_next_beep_at = now;
     s_next_led_flip = now;
-
     lv_obj_set_width(s_land_fill, 0);
     lv_obj_set_style_bg_color(s_land_btn, theme::red_dark(), 0);
-    lv_label_set_text(s_land_label, "LAND SENT (mock)");
+    lv_label_set_text(s_land_label, text);
+}
+
+void ui_panel_land_result(bool accepted) {
+    if (accepted) {
+        land_alert("LAND ACCEPTED", 3, 1760, LANDING_SHOW_MS);
+        apply_pill("LANDING", Sev::DANGER);
+    } else {
+        land_alert("LAND CMD FAILED", 2, 440, 3000);
+        apply_pill("LINK FAIL", Sev::DANGER);
+    }
+}
+
+static void land_trigger() {
+    s_pressing = false;
+    uint32_t now = lv_tick_get();
+
+    if (s_land_handler) {
+        // Live mode: dispatch and wait for ui_panel_land_result().
+        // Failsafe timeout in case no result ever arrives.
+        s_landing = true;
+        s_landing_until = now + 12000;
+        s_beeps_left = 0;
+        s_next_led_flip = now;
+        lv_obj_set_width(s_land_fill, 0);
+        lv_obj_set_style_bg_color(s_land_btn, theme::red_dark(), 0);
+        lv_label_set_text(s_land_label, "SENDING LAND CMD...");
+        apply_pill("LANDING", Sev::DANGER);
+        if (!s_land_handler()) ui_panel_land_result(false);
+        return;
+    }
+
+    // Mock mode (Phase 2 demo path)
+    land_alert("LAND SENT (mock)", 3, 1760, LANDING_SHOW_MS);
     apply_pill("LANDING", Sev::DANGER);
 }
 
@@ -126,7 +162,7 @@ static void land_timer_cb(lv_timer_t*) {
 
     if (s_landing) {
         if (s_beeps_left > 0 && now >= s_next_beep_at) {
-            buzzer_beep(1760, 120);
+            buzzer_beep(s_beep_freq, 120);
             s_next_beep_at = now + 250;
             s_beeps_left--;
         }

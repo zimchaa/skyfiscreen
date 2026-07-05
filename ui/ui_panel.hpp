@@ -24,3 +24,10 @@ void ui_panel_set_wifi(const char* ssid, const char* password, const char* qr_da
 
 // True while a land command sequence is active (mock: brief "SENT" state).
 bool ui_panel_is_landing();
+
+// Optional async land dispatcher (Phase 3: net_send_land). When set, the
+// hold-to-confirm shows "SENDING" and waits for ui_panel_land_result();
+// when unset, the mock "LAND SENT" flow runs. Handler returns false if the
+// command could not even be dispatched (link down).
+void ui_panel_set_land_handler(bool (*handler)());
+void ui_panel_land_result(bool accepted);

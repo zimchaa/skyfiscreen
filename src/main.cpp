@@ -16,6 +16,7 @@
 #include "lvgl_port.hpp"
 #include "peripherals.hpp"
 #include "mock_data.hpp"
+#include "net.hpp"
 #include "../ui/ui_panel.hpp"
 
 using namespace pimoroni;
@@ -65,11 +66,18 @@ int main() {
     peripherals_init();
     lvgl_port_init(&presto, &gfx);
     ui_panel_create();
-    mock_data_start();
+
+    // Live data over WiFi/REST when configured, mock data otherwise
+    if (net_init()) {
+        ui_panel_set_land_handler(net_send_land);
+    } else {
+        mock_data_start();
+    }
     printf("panel up, entering main loop\n");
 
     while (true) {
         uint32_t wait_ms = lv_timer_handler();
+        net_task();
         peripherals_task();
         sleep_ms(wait_ms > 10 ? 10 : wait_ms);
     }

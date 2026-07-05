@@ -9,6 +9,10 @@ cmake_minimum_required(VERSION 3.13)
 set(PICO_PLATFORM rp2350-arm-s)
 set(PICO_BOARD presto)
 set(PICO_NUM_GPIOS 48)
+# The presto board header defines the CYW43 (RM2 WiFi module) pins but, being
+# MicroPython-oriented, doesn't carry the pico_board_cmake_set marker that
+# makes the SDK generate the cyw43/lwIP targets — declare support ourselves.
+set(PICO_CYW43_SUPPORTED 1)
 list(APPEND PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/lib/presto/boards/presto)
 
 # ─── Local dependency paths (fully offline — no network fetch) ───────
@@ -55,11 +59,33 @@ add_executable(${NAME}
     src/lvgl_port.cpp
     src/peripherals.cpp
     src/mock_data.cpp
+    src/net.cpp
+    src/http_post.cpp
     ui/ui_panel.cpp
 )
 
+# ─── Network configuration (optional; mock mode when unset) ─────────
+# cmake -B build -DSKYFI_WIFI_SSID=... -DSKYFI_WIFI_PASSWORD=... \
+#                -DSKYFI_API_HOST=<ip> [-DSKYFI_API_PORT=8000]
+set(SKYFI_WIFI_SSID     "" CACHE STRING "WiFi SSID the panel joins")
+set(SKYFI_WIFI_PASSWORD "" CACHE STRING "WiFi password")
+set(SKYFI_API_HOST      "" CACHE STRING "REST API host IP (the Pi / mock server)")
+set(SKYFI_API_PORT      "8000" CACHE STRING "REST API port")
+if(SKYFI_WIFI_SSID AND SKYFI_API_HOST)
+    target_compile_definitions(${NAME} PRIVATE
+        SKYFI_WIFI_SSID="${SKYFI_WIFI_SSID}"
+        SKYFI_WIFI_PASSWORD="${SKYFI_WIFI_PASSWORD}"
+        SKYFI_API_HOST="${SKYFI_API_HOST}"
+        SKYFI_API_PORT=${SKYFI_API_PORT}
+    )
+    message(STATUS "SkyFi net: SSID='${SKYFI_WIFI_SSID}' API=${SKYFI_API_HOST}:${SKYFI_API_PORT}")
+else()
+    message(STATUS "SkyFi net: not configured -> firmware runs in mock-data mode")
+endif()
+
 target_include_directories(${NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/lvgl
+    ${CMAKE_CURRENT_LIST_DIR}/src/config      # lwipopts.h
     ${PIMORONI_PICO_PATH}/drivers/plasma
 )
 
@@ -71,6 +97,8 @@ target_link_libraries(${NAME}
     pico_multicore
     pico_rand
     pico_graphics
+    pico_cyw43_arch_lwip_poll
+    pico_lwip_http
     hardware_interp
     hardware_i2c
     hardware_pwm
