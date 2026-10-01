@@ -25,6 +25,10 @@ struct Tile {
 };
 static Tile s_tiles[UI_NUM_READINGS];
 
+static lv_obj_t* s_link = nullptr;
+static lv_obj_t* s_station = nullptr;
+static lv_obj_t* s_station_strip = nullptr;
+
 static lv_obj_t* s_qr = nullptr;
 static lv_obj_t* s_qr_ssid = nullptr;
 static lv_obj_t* s_qr_pw = nullptr;
@@ -69,6 +73,15 @@ void ui_panel_set_reading(int idx, const char* label, const char* value_text, Se
     lv_label_set_text(s_tiles[idx].name, label);
     lv_label_set_text(s_tiles[idx].value, value_text);
     lv_obj_set_style_bg_color(s_tiles[idx].strip, theme::sev_color(sev), 0);
+}
+
+void ui_panel_set_link(bool online) {
+    lv_obj_set_style_text_color(s_link, online ? theme::ok() : theme::danger(), 0);
+}
+
+void ui_panel_set_station(const char* text, Sev sev) {
+    lv_label_set_text(s_station, text);
+    lv_obj_set_style_bg_color(s_station_strip, theme::sev_color(sev), 0);
 }
 
 void ui_panel_set_wifi(const char* ssid, const char* password, const char* qr_data) {
@@ -207,6 +220,12 @@ static void build_header(lv_obj_t* scr) {
     lv_obj_set_style_text_font(brand, &lv_font_montserrat_14, 0);
     lv_obj_align(brand, LV_ALIGN_LEFT_MID, 22, 0);
 
+    s_link = lv_label_create(bar);
+    lv_label_set_text(s_link, "PI");
+    lv_obj_set_style_text_font(s_link, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_link, theme::danger(), 0);
+    lv_obj_align(s_link, LV_ALIGN_RIGHT_MID, -104, 0);
+
     s_pill = make_plain(bar);
     lv_obj_set_size(s_pill, 92, 18);
     lv_obj_set_style_radius(s_pill, 9, 0);
@@ -256,6 +275,36 @@ static void build_dashboard(lv_obj_t* page) {
     build_tile(page, 1, gap * 2 + w, gap, w, h);
     build_tile(page, 2, gap, gap * 2 + h, w, h);
     build_tile(page, 3, gap * 2 + w, gap * 2 + h, w, h);
+}
+
+static void build_station_page(lv_obj_t* page) {
+    lv_obj_t* title = lv_label_create(page);
+    lv_label_set_text(title, "GROUND STATION");
+    lv_obj_set_style_text_color(title, theme::aqua(), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
+
+    lv_obj_t* card = make_plain(page);
+    lv_obj_set_size(card, 228, BODY_H - 30);
+    lv_obj_set_pos(card, 6, 24);
+    lv_obj_set_style_bg_color(card, theme::surface(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 6, 0);
+
+    s_station_strip = make_plain(card);
+    lv_obj_set_size(s_station_strip, 4, BODY_H - 42);
+    lv_obj_set_pos(s_station_strip, 6, 6);
+    lv_obj_set_style_radius(s_station_strip, 2, 0);
+    lv_obj_set_style_bg_color(s_station_strip, theme::danger(), 0);
+    lv_obj_set_style_bg_opa(s_station_strip, LV_OPA_COVER, 0);
+
+    s_station = lv_label_create(card);
+    lv_label_set_text(s_station, "Waiting for the Pi\n(USB link)...");
+    lv_obj_set_width(s_station, 200);
+    lv_label_set_long_mode(s_station, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(s_station, theme::text(), 0);
+    lv_obj_set_style_text_font(s_station, &lv_font_montserrat_14, 0);
+    lv_obj_set_pos(s_station, 18, 8);
 }
 
 static void build_wifi_page(lv_obj_t* page) {
@@ -318,7 +367,7 @@ void ui_panel_create() {
 
     build_header(scr);
 
-    // Swipeable body: dashboard <-> wifi QR
+    // Swipeable body: dashboard <-> ground station <-> wifi QR
     lv_obj_t* tv = lv_tileview_create(scr);
     lv_obj_set_size(tv, 240, BODY_H);
     lv_obj_set_pos(tv, 0, HEADER_H);
@@ -326,8 +375,10 @@ void ui_panel_create() {
     lv_obj_set_scrollbar_mode(tv, LV_SCROLLBAR_MODE_OFF);
 
     lv_obj_t* dash = lv_tileview_add_tile(tv, 0, 0, LV_DIR_RIGHT);
-    lv_obj_t* wifi = lv_tileview_add_tile(tv, 1, 0, LV_DIR_LEFT);
+    lv_obj_t* station = lv_tileview_add_tile(tv, 1, 0, LV_DIR_HOR);
+    lv_obj_t* wifi = lv_tileview_add_tile(tv, 2, 0, LV_DIR_LEFT);
     build_dashboard(dash);
+    build_station_page(station);
     build_wifi_page(wifi);
 
     build_land_button(scr);

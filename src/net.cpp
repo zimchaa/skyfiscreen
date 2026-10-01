@@ -1,6 +1,7 @@
 #include "net.hpp"
 #include "http_post.hpp"
 #include "peripherals.hpp"
+#include "pilink.hpp"
 #include "../ui/ui_panel.hpp"
 
 #include "pico/cyw43_arch.h"
@@ -80,7 +81,9 @@ static Sev sev_from_status(const char* s) {
 
 // ── Response handlers ────────────────────────────────────────────────
 
+// The USB link to the Pi owns the pill/LEDs while it is up; WiFi is the fallback.
 static void apply_status(const char* json) {
+    if (pilink_online()) return;
     char system[16] = "", drone[16] = "";
     json_str(json, "system", system, sizeof(system));
     json_str(json, "drone", drone, sizeof(drone));
@@ -214,7 +217,7 @@ static void start_join() {
                                   CYW43_AUTH_WPA2_AES_PSK);
     s_state = NetState::JOINING;
     s_next_action_ms = lv_tick_get() + 500;
-    ui_panel_set_status("WIFI...", Sev::WARN);
+    if (!pilink_online()) ui_panel_set_status("WIFI...", Sev::WARN);
 }
 
 bool net_init() {
@@ -250,7 +253,7 @@ void net_task() {
             s_next_action_ms = now;
         } else if (st < 0) {          // auth/join failure -> retry
             printf("net: join failed (%d), retrying\n", st);
-            ui_panel_set_status("WIFI FAIL", Sev::DANGER);
+            if (!pilink_online()) ui_panel_set_status("WIFI FAIL", Sev::DANGER);
             s_next_action_ms = now + JOIN_RETRY_MS;
             start_join();
         } else {
@@ -262,15 +265,19 @@ void net_task() {
     // ONLINE
     if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) != CYW43_LINK_UP) {
         printf("net: wifi lost, rejoining\n");
-        ui_panel_set_status("LINK LOST", Sev::DANGER);
-        if (!ui_panel_is_landing()) leds_set(60, 0, 0);
+        if (!pilink_online()) {
+            ui_panel_set_status("LINK LOST", Sev::DANGER);
+            if (!ui_panel_is_landing()) leds_set(60, 0, 0);
+        }
         start_join();
         return;
     }
 
     // Staleness -> pill/LED override (freshness beats last server-said state)
     uint32_t age = now - s_last_ok_ms;
-    if (age > OFFLINE_AFTER_MS) {
+    if (pilink_online()) {
+        // USB link healthy: WiFi staleness isn't the operator's problem
+    } else if (age > OFFLINE_AFTER_MS) {
         ui_panel_set_status("LINK LOST", Sev::DANGER);
         if (!ui_panel_is_landing()) leds_set(60, 0, 0);
     } else if (age > STALE_AFTER_MS) {
@@ -282,8 +289,9 @@ void net_task() {
         if (!s_wifi_info_fetched) {
             start_get("/api/v1/wifi");
         } else {
-            start_get(s_poll_env_next ? "/api/v1/environment" : "/api/v1/status");
-            s_poll_env_next = !s_poll_env_next;
+            // Weather tiles come from the local sensors (sensor_hub), so only
+            // status is polled over WiFi.
+            start_get("/api/v1/status");
         }
     }
     s_next_action_ms = now + POLL_INTERVAL_MS / 2;   // two endpoints per interval

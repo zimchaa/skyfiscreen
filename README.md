@@ -8,13 +8,26 @@ QR code, and a big **SAFETY LAND NOW** button — talking to the Pi's REST API.
 Built on the [pimoroni/presto-boilerplate](https://github.com/pimoroni/presto-boilerplate)
 foundation (pico-sdk + Pimoroni `ST7701` driver) with **LVGL** for the UI.
 
-See the sibling `../skyfiapp` for the wider system (the "Virtual Mast Wizard").
+See the sibling `../sky-fi-app` (github zimchaa/skyfi-app) for the wider system:
+its `server/` (skyfid) runs on the Pi, and `contracts/presto-link.md` defines the
+USB serial protocol this firmware speaks.
+
+## System
+
+```
+Enviro Weather (enviro/)  --Qw/ST I2C-->  Presto (this firmware)  --USB serial-->  Pi (skyfid)
+  anemometer, vane, rain     BME280/LTR-559    tiles, LAND button       pilink JSON lines    web app, drone sim,
+  as I2C regs @ 0x42         read directly     ground-station page      (WiFi = fallback)    auto-land
+```
 
 ## Layout
 
 ```
-src/            firmware sources (main + LVGL bridge + peripherals + net)
+src/            firmware sources (main + LVGL bridge + peripherals + net,
+                pilink = USB link to the Pi, sensor_hub = Qw/ST weather sensors)
 ui/             LVGL screens
+enviro/         firmware for the Enviro Weather (I2C hub for wind/rain)
+common/         shared between the two firmwares (enviro_hub_regs.h)
 lib/            dependencies (git clones): pico-sdk, pimoroni-pico, presto, lvgl
 mock-server/    FastAPI stand-in for the Pi's REST API (Phase 3+)
 vendor/         reference: upstream presto-boilerplate
@@ -52,7 +65,8 @@ number can change across replug cycles).
 The `lib/` clones are not committed; anything we fix in them lives in `patches/`
 and must be re-applied after a fresh clone:
 
-- **`patches/st7701-start-frame-xfer-hang.patch`** (required): fixes a hang in
+- **`patches/st7701-start-frame-xfer-hang.patch`**: *now merged upstream in
+  pimoroni/presto — only needed for a presto checkout older than that.* Fixes a hang in
   Pimoroni's ST7701 driver — `start_frame_xfer()` exec'd an `out` on the
   parallel PIO SM while its FIFO was empty (autopull enabled), which latches
   EXEC_STALLED forever; `pio_sm_exec_wait_blocking()` then spins inside the
@@ -60,7 +74,30 @@ and must be re-applied after a fresh clone:
   with `pio_sm_restart()` + a non-blocking `jmp`. Worth upstreaming to
   pimoroni/presto. Apply with: `git -C lib/presto apply ../../patches/st7701-start-frame-xfer-hang.patch`
 
-## Live data (Phase 3+)
+## Build and flash from the Pi (no BOOT button needed)
+
+The Pi (`4our.local`) has the toolchain and `picotool`; both boards are reflashed
+over their USB connections. The BME280 driver needs its submodule:
+`git -C lib/pimoroni-pico submodule update --init drivers/bme280/src`.
+
+```bash
+./build.sh && sudo picotool load -f --ser <presto serial> -x build/skyfiscreen.uf2
+enviro/build.sh && sudo picotool load -f --ser <enviro serial> -x enviro/build/enviro_hub.uf2
+```
+
+Serials: `ls /dev/serial/by-id/`. Backups of the July 2026 firmware on both boards
+are in `4our.local:~/skyfi/firmware-backups/` (restore with `picotool load -f -x`).
+
+## Enviro hub (`enviro/`)
+
+The Enviro Weather runs `enviro_hub`: an I2C target at **0x42** on the Qw/ST bus
+exposing anemometer (3 s average + 60 s gust), wind vane and rain gauge as registers
+(`common/enviro_hub_regs.h`; calibration from pimoroni/enviro). The Enviro's own
+BME280 (0x77) and LTR-559 (0x23) share that bus and are read directly by the Presto.
+A sensor that's missing shows `--` on the panel and is re-probed every few seconds;
+it is never replaced with mock values.
+
+## Live data over WiFi (fallback link)
 
 The panel joins WiFi and polls the ground-station REST API when credentials are
 baked in at build time; otherwise it runs on mock data. `SKYFI_API_HOST` must be
@@ -89,5 +126,5 @@ the server demonstrates the stale/offline states (pill + LEDs).
 - **Phase 0** — prove build/flash/display pipeline (minimal PicoGraphics test). ✅
 - **Phase 1** — port LVGL; wire touch, buzzer, RGB LEDs, backlight. ✅
 - **Phase 2** — the SkyFi panel UI (env tiles, WiFi QR, LAND NOW), mocked data. ✅
-- **Phase 3** — WiFi + REST client against the mock Pi server. ← current
-- **Phase 4** — wired backup link + polish.
+- **Phase 3** — WiFi + REST client against the mock Pi server. ✅
+- **Phase 4** — USB link to the Pi (pilink), real Enviro sensors, ground-station page. ← current

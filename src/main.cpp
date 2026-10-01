@@ -1,9 +1,12 @@
-// SkyFi Screen — Phase 2: the SkyFi panel UI (mocked data)
+// SkyFi Screen — the ground station's physical control panel.
 //
 // core1 owns the ST7701 display (init + scanout IRQs); core0 runs LVGL.
-// Panel: header + status pill, 2x2 environmental tiles (swipe left for the
-// WiFi-join QR page), and the hold-to-confirm SAFETY LAND NOW button.
-// Data is mocked (src/mock_data.cpp) until the Phase 3 REST client.
+// Panel: header (PI link + status pill), 2x2 weather tiles from the Enviro
+// Weather on Qw/ST (swipe for ground-station status and the WiFi-join QR),
+// and the hold-to-confirm SAFETY LAND NOW button.
+//
+// Links to the Pi: USB serial (pilink, primary — skyfi-app/contracts/
+// presto-link.md) and WiFi/REST (net, fallback, when configured at build).
 
 #include "libraries/pico_graphics/pico_graphics.hpp"
 #include "drivers/st7701/st7701.hpp"
@@ -15,7 +18,8 @@
 #include "lvgl.h"
 #include "lvgl_port.hpp"
 #include "peripherals.hpp"
-#include "mock_data.hpp"
+#include "pilink.hpp"
+#include "sensor_hub.hpp"
 #include "net.hpp"
 #include "../ui/ui_panel.hpp"
 
@@ -35,6 +39,11 @@ static uint16_t front_buffer[FRAME_WIDTH * FRAME_HEIGHT];
 
 static ST7701* g_presto = nullptr;
 
+// LAND: USB first (fastest, retried until acked), WiFi if USB is down.
+static bool send_land() {
+    return pilink_send_land() || net_send_land();
+}
+
 static void core1_entry() {
     g_presto->init();
     multicore_fifo_push_blocking(1);
@@ -46,7 +55,7 @@ static void core1_entry() {
 int main() {
     stdio_init_all();
 
-    printf("\n=== SkyFi Screen — Phase 1 (LVGL) ===\n");
+    printf("\n=== SkyFi Screen ===\n");
     printf("sys_clk = %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));
 
     gpio_init(LCD_CS);
@@ -67,16 +76,16 @@ int main() {
     lvgl_port_init(&presto, &gfx);
     ui_panel_create();
 
-    // Live data over WiFi/REST when configured, mock data otherwise
-    if (net_init()) {
-        ui_panel_set_land_handler(net_send_land);
-    } else {
-        mock_data_start();
-    }
+    pilink_init();
+    sensor_hub_init();
+    net_init();                         // WiFi fallback; no-op unless configured
+    ui_panel_set_land_handler(send_land);
     printf("panel up, entering main loop\n");
 
     while (true) {
         uint32_t wait_ms = lv_timer_handler();
+        pilink_task();
+        sensor_hub_task();
         net_task();
         peripherals_task();
         sleep_ms(wait_ms > 10 ? 10 : wait_ms);

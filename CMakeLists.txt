@@ -42,10 +42,13 @@ include_directories(${PIMORONI_PRESTO_PATH})
 list(APPEND CMAKE_MODULE_PATH ${PIMORONI_PRESTO_PATH})
 
 # Pimoroni library modules (resolved via PIMORONI_PICO_PATH module path)
+include(common/pimoroni_i2c)
 include(common/pimoroni_bus)
 include(libraries/pico_graphics/pico_graphics)
 include(drivers/st7701/st7701_presto)
 include(drivers/plasma/plasma)          # WS2812 ambient LEDs
+include(drivers/bme280/bme280)          # Enviro Weather sensors on Qw/ST
+include(drivers/ltr559/ltr559)
 
 # ─── LVGL ────────────────────────────────────────────────────────────
 set(LV_CONF_PATH ${CMAKE_CURRENT_LIST_DIR}/lv_conf.h)
@@ -58,7 +61,8 @@ add_executable(${NAME}
     src/main.cpp
     src/lvgl_port.cpp
     src/peripherals.cpp
-    src/mock_data.cpp
+    src/pilink.cpp
+    src/sensor_hub.cpp
     src/net.cpp
     src/http_post.cpp
     ui/ui_panel.cpp
@@ -93,6 +97,8 @@ target_link_libraries(${NAME}
     st7701_presto
     lvgl
     plasma
+    bme280
+    ltr559
     pico_stdlib
     pico_multicore
     pico_rand
