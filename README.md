@@ -85,7 +85,8 @@ over their USB connections. The BME280 driver needs its submodule:
 enviro/build.sh && sudo picotool load -f --ser <enviro serial> -x enviro/build/enviro_hub.uf2
 ```
 
-Serials: `ls /dev/serial/by-id/`. Backups of the July 2026 firmware on both boards
+Serials: `ls /dev/serial/by-id/`. If the running firmware is hung, run
+`tools/flash-when-bootsel.sh` and put the Presto into BOOTSEL by hand. Backups of the July 2026 firmware on both boards
 are in `4our.local:~/skyfi/firmware-backups/` (restore with `picotool load -f -x`).
 
 ## Enviro hub (`enviro/`)
