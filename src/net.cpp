@@ -35,7 +35,6 @@ static NetState s_state = NetState::OFF;
 static uint32_t s_next_action_ms = 0;     // next join-check / poll time
 static uint32_t s_last_ok_ms = 0;         // last successful API response
 static bool s_wifi_info_fetched = false;
-static bool s_poll_env_next = false;      // alternate status/environment
 static bool s_get_busy = false;
 
 static const uint32_t POLL_INTERVAL_MS   = 1000;
@@ -103,38 +102,6 @@ static void apply_status(const char* json) {
     }
 }
 
-static void apply_environment(const char* json) {
-    // readings[] arrive in server order; show the first four.
-    const char* p = json;
-    for (int idx = 0; idx < UI_NUM_READINGS; idx++) {
-        p = strchr(p, '{');
-        if (idx == 0 && p) p = strchr(p + 1, '{');   // skip the outer object
-        if (!p) break;
-
-        char label[16] = "", unit[8] = "", status[12] = "ok";
-        float value = 0;
-        // Bound the search to this object so keys don't bleed across readings
-        const char* end = strchr(p, '}');
-        if (!end) break;
-        char obj[192];
-        size_t len = (size_t)(end - p + 1);
-        if (len >= sizeof(obj)) len = sizeof(obj) - 1;
-        memcpy(obj, p, len);
-        obj[len] = '\0';
-
-        json_str(obj, "label", label, sizeof(label));
-        json_str(obj, "unit", unit, sizeof(unit));
-        json_str(obj, "status", status, sizeof(status));
-        json_num(obj, "value", &value);
-
-        char text[24];
-        snprintf(text, sizeof(text), "%.1f %s", (double)value, unit);
-        ui_panel_set_reading(idx, label, text, sev_from_status(status));
-
-        p = end + 1;
-    }
-}
-
 static void apply_wifi(const char* json) {
     char ssid[33] = "", qr[128] = "", pw[33] = "";
     json_str(json, "ssid", ssid, sizeof(ssid));
@@ -170,7 +137,6 @@ static void get_result_cb(void*, httpc_result_t result, u32_t, u32_t srv_res, er
     s_last_ok_ms = lv_tick_get();
 
     if (strcmp(s_path, "/api/v1/status") == 0)           apply_status(s_body);
-    else if (strcmp(s_path, "/api/v1/environment") == 0) apply_environment(s_body);
     else if (strcmp(s_path, "/api/v1/wifi") == 0) {
         apply_wifi(s_body);
         s_wifi_info_fetched = true;

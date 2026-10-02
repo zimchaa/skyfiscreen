@@ -13,10 +13,13 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/clocks.h"
+#include "hardware/psram.h"
+#include "pico/platform/sections.h"
 #include <cstdio>
 
 #include "lvgl.h"
 #include "lvgl_port.hpp"
+#include "display_config.hpp"
 #include "peripherals.hpp"
 #include "pilink.hpp"
 #include "sensor_hub.hpp"
@@ -25,8 +28,8 @@
 
 using namespace pimoroni;
 
-static const uint FRAME_WIDTH  = 240;   // half-res, pixel-doubled to 480x480
-static const uint FRAME_HEIGHT = 240;
+static const uint FRAME_WIDTH  = DISPLAY_WIDTH;    // 480 full-res, 240 pixel-doubled
+static const uint FRAME_HEIGHT = DISPLAY_HEIGHT;
 
 static const uint BACKLIGHT = 45;
 static const uint LCD_CLK = 26;
@@ -34,8 +37,17 @@ static const uint LCD_CS  = 28;
 static const uint LCD_DAT = 27;
 static const uint LCD_DC  = -1;
 
+// The scanout buffer must stay in SRAM: the core1 PIO/DMA scanout cannot
+// tolerate QMI (flash/PSRAM) latency without underrunning the panel.
 static uint16_t back_buffer[FRAME_WIDTH * FRAME_HEIGHT];
+#if PRESTO_FULL_RES
+// At 480x480 the front buffer (450KB) doesn't fit in SRAM beside the scanout
+// buffer, so it lives in PSRAM. Only core 0 touches it: LVGL flushes stripes
+// in, presto->update() beam-races the copy out.
+static uint16_t __uninitialized_psram("framebuffer") front_buffer[FRAME_WIDTH * FRAME_HEIGHT];
+#else
 static uint16_t front_buffer[FRAME_WIDTH * FRAME_HEIGHT];
+#endif
 
 static ST7701* g_presto = nullptr;
 
@@ -57,6 +69,8 @@ int main() {
 
     printf("\n=== SkyFi Screen ===\n");
     printf("sys_clk = %lu Hz\n", (unsigned long)clock_get_hz(clk_sys));
+    printf("display: %ux%u, psram: %u bytes %s\n", FRAME_WIDTH, FRAME_HEIGHT,
+           (unsigned)psram_get_size(), psram_is_available() ? "available" : "NOT AVAILABLE");
 
     gpio_init(LCD_CS);
     gpio_set_dir(LCD_CS, GPIO_OUT);

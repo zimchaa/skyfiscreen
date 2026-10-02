@@ -71,7 +71,6 @@ void sensor_hub_init() {
     s_ltr = new LTR559(s_i2c);
     probe();
     s_next_probe = lv_tick_get() + REPROBE_MS;
-    for (int i = 0; i < UI_NUM_READINGS; i++) ui_panel_set_reading(i, "...", "--", Sev::WARN);
 }
 
 void sensor_hub_task() {
@@ -130,25 +129,14 @@ void sensor_hub_task() {
         wx.rain_rate = rain_hour;     // == mm/h over that hour
     }
 
-    // ── tiles: WIND, GUST, TEMP, RAIN ──
-    if (s_hub_ok) {
-        snprintf(buf, sizeof(buf), "%.1f m/s", (double)wx.wind);
-        ui_panel_set_reading(0, "WIND", buf, level(wx.wind, WIND_WARN, WIND_DANGER));
-        snprintf(buf, sizeof(buf), "%.1f m/s", (double)wx.gust);
-        ui_panel_set_reading(1, "GUST", buf, level(wx.gust, GUST_WARN, GUST_DANGER));
-        snprintf(buf, sizeof(buf), "%.1f mm/h", (double)wx.rain_rate);
-        ui_panel_set_reading(3, "RAIN", buf, level(wx.rain_rate, 4, 10));
-    } else {
-        ui_panel_set_reading(0, "WIND", "--", Sev::WARN);
-        ui_panel_set_reading(1, "GUST", "--", Sev::WARN);
-        ui_panel_set_reading(3, "RAIN", "--", Sev::WARN);
-    }
-    if (!std::isnan(wx.temp)) {
-        snprintf(buf, sizeof(buf), "%.1f C", (double)wx.temp);
-        ui_panel_set_reading(2, "TEMP", buf, Sev::OK);
-    } else {
-        ui_panel_set_reading(2, "TEMP", "--", Sev::WARN);
-    }
+    // ── dashboard tiles (NaN = "--") ──
+    ui_panel_set_metric(Metric::WIND, wx.wind, std::isnan(wx.wind) ? Sev::WARN : level(wx.wind, WIND_WARN, WIND_DANGER));
+    ui_panel_set_metric(Metric::GUST, wx.gust, std::isnan(wx.gust) ? Sev::WARN : level(wx.gust, GUST_WARN, GUST_DANGER));
+    ui_panel_set_metric(Metric::RAIN, wx.rain_rate, std::isnan(wx.rain_rate) ? Sev::WARN : level(wx.rain_rate, 4, 10));
+    ui_panel_set_metric(Metric::TEMP, wx.temp, Sev::OK);
+    ui_panel_set_metric(Metric::HUM, wx.hum, Sev::OK);
+    ui_panel_set_metric(Metric::PRES, wx.pres, Sev::OK);
+    ui_panel_set_metric(Metric::LUX, wx.lux, Sev::OK);
 
     // Only report fields we actually measured (NaN fields are omitted).
     if (s_hub_ok || s_bme_ok || s_ltr_ok) pilink_send_weather(wx);

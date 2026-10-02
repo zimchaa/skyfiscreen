@@ -159,6 +159,12 @@ static void on_status(const char* j) {
              st.msg);
     ui_panel_set_station(text, sev);
 
+    // Drone telemetry tiles (thresholds mirror the server's defaults).
+    Sev batt = st.batt <= 20 ? Sev::DANGER : st.batt <= 40 ? Sev::WARN : Sev::OK;
+    Sev teth = st.tether >= 20 ? Sev::DANGER : st.tether >= 16 ? Sev::WARN : Sev::OK;
+    ui_panel_set_metric(Metric::BATT, (float)st.batt, batt);
+    ui_panel_set_metric(Metric::TETHER, st.tether, teth);
+
     if (!ui_panel_is_landing()) {
         switch (sev) {
             case Sev::OK:     leds_set(8, 28, 0);  break;   // dim green
@@ -240,6 +246,8 @@ void pilink_task() {
         if (!online) {
             ui_panel_set_status("PI OFFLINE", Sev::DANGER);
             if (!ui_panel_is_landing()) leds_set(60, 0, 0);
+            ui_panel_set_metric(Metric::BATT, NAN, Sev::WARN);
+            ui_panel_set_metric(Metric::TETHER, NAN, Sev::WARN);
             ui_panel_set_station("Pi not responding on USB.\nLAND falls back to WiFi\nif configured.", Sev::DANGER);
         }
     }
