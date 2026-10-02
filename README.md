@@ -28,7 +28,8 @@ src/            firmware sources (main + LVGL bridge + peripherals + net,
 ui/             LVGL screens
 enviro/         firmware for the Enviro Weather (I2C hub for wind/rain)
 common/         shared between the two firmwares (enviro_hub_regs.h)
-lib/            dependencies (git clones): pico-sdk, pimoroni-pico, presto, lvgl
+lib/            dependencies, pinned git submodules: pico-sdk 2.3.0, pimoroni-pico,
+                presto (zimchaa fork, st7701 fix), lvgl 9.2
 mock-server/    FastAPI stand-in for the Pi's REST API (Phase 3+)
 vendor/         reference: upstream presto-boilerplate
 ```
@@ -39,6 +40,14 @@ vendor/         reference: upstream presto-boilerplate
 sudo apt update && sudo apt install -y cmake ninja-build build-essential \
   gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
   python3-venv git
+```
+
+## Get the dependencies
+
+```bash
+git submodule update --init --depth 1
+git -C lib/pico-sdk submodule update --init --depth 1 lib/tinyusb lib/cyw43-driver lib/lwip
+git -C lib/pimoroni-pico submodule update --init --depth 1 drivers/bme280/src
 ```
 
 ## Build

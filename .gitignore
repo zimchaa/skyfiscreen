@@ -7,11 +7,7 @@ build/
 *.dis
 *.map
 
-# Third-party sources (cloned locally; formalised as submodules later)
-lib/pico-sdk/
-lib/pimoroni-pico/
-lib/presto/
-lib/lvgl/
+# Third-party reference checkout (lib/ deps are pinned submodules)
 vendor/presto-boilerplate/
 
 # Python mock server

@@ -1,0 +1,18 @@
+[submodule "lib/pico-sdk"]
+	path = lib/pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk
+	shallow = true
+[submodule "lib/pimoroni-pico"]
+	path = lib/pimoroni-pico
+	url = https://github.com/pimoroni/pimoroni-pico
+	shallow = true
+[submodule "lib/presto"]
+	path = lib/presto
+	url = https://github.com/zimchaa/presto
+	branch = fix/st7701-start-frame-xfer-stall
+	shallow = true
+[submodule "lib/lvgl"]
+	path = lib/lvgl
+	url = https://github.com/lvgl/lvgl
+	branch = release/v9.2
+	shallow = true
