@@ -4,8 +4,8 @@
 //   header   — brand, PI link indicator, system status pill
 //   tabs     — segmented DASH | TRENDS | STATION | WIFI (tap; swipe also works)
 //   body     — DASH: 3x3 metric tiles, each with value + 5-minute sparkline
-//              TRENDS: pick a metric, last hour as a large chart; the LAYOUT
-//                      button cycles three selector designs (chips/list/groups)
+//              TRENDS: metric list with live values; last hour of the
+//                      selected one as a large chart
 //              STATION: drone state, altitude/battery/tether gauges, host/IP
 //              WIFI: QR code to join the ground-station WiFi
 //   footer   — full-width SAFETY LAND NOW hold-to-confirm button
@@ -55,3 +55,7 @@ bool ui_panel_is_landing();
 // if the command could not even be dispatched (no link).
 void ui_panel_set_land_handler(bool (*handler)());
 void ui_panel_land_result(bool accepted);
+
+// A LAND commanded elsewhere (app, auto-land): same beeps/flash/LANDING as
+// pressing the panel's own button, with `text` on the button.
+void ui_panel_remote_land(const char* text);

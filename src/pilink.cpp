@@ -182,6 +182,15 @@ static void on_ack(const char* j) {
     ui_panel_land_result(jtrue(j, "ok"));
 }
 
+// A LAND from the app / auto-land: alert exactly like our own button.
+static void on_landing(const char* j) {
+    char src[16] = "";
+    jstr(j, "src", src, sizeof(src));
+    if (strcmp(src, "auto") == 0)      ui_panel_remote_land("AUTO-LAND");
+    else if (strcmp(src, "web") == 0)  ui_panel_remote_land("LAND FROM APP");
+    else                               ui_panel_remote_land("LAND COMMANDED");
+}
+
 static void on_wifi(const char* j) {
     char ssid[33] = "", pw[33] = "", qr[128] = "";
     jstr(j, "ssid", ssid, sizeof(ssid));
@@ -196,6 +205,7 @@ static void on_line(const char* j) {
     if (strcmp(t, "status") == 0)    on_status(j);
     else if (strcmp(t, "ack") == 0)  on_ack(j);
     else if (strcmp(t, "wifi") == 0) on_wifi(j);
+    else if (strcmp(t, "landing") == 0) on_landing(j);
 }
 
 // ── public ───────────────────────────────────────────────────────────

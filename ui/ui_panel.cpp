@@ -28,26 +28,23 @@ static const int HIST_N  = 720;
 static const int N_METRICS = (int)Metric::COUNT;
 static const int N_TILES = 9;            // ALT is trends-only
 
-enum class Group { WEATHER, DRONE };
-
 struct MetricInfo {
     const char* name;       // tile label
     const char* tab;        // short selector label
     const char* fmt;        // printf for the value
     int32_t min_span;       // smallest y range shown (x10), so noise stays flat
-    Group group;
 };
 static const MetricInfo METRICS[N_METRICS] = {
-    {"WIND",     "WIND", "%.1f m/s",  20, Group::WEATHER},
-    {"GUST",     "GUST", "%.1f m/s",  20, Group::WEATHER},
-    {"RAIN",     "RAIN", "%.1f mm/h", 10, Group::WEATHER},
-    {"TEMP",     "TEMP", "%.1f C",    20, Group::WEATHER},
-    {"HUMIDITY", "HUM",  "%.0f %%",   50, Group::WEATHER},
-    {"PRESSURE", "PRES", "%.0f hPa",  20, Group::WEATHER},
-    {"LIGHT",    "LUX",  "%.0f lux", 100, Group::WEATHER},
-    {"BATTERY",  "BATT", "%.0f %%",  100, Group::DRONE},
-    {"TETHER",   "TETH", "%.1f kg",   20, Group::DRONE},
-    {"ALTITUDE", "ALT",  "%.0f m",   100, Group::DRONE},
+    {"WIND",     "WIND", "%.1f m/s",  20},
+    {"GUST",     "GUST", "%.1f m/s",  20},
+    {"RAIN",     "RAIN", "%.1f mm/h", 10},
+    {"TEMP",     "TEMP", "%.1f C",    20},
+    {"HUMIDITY", "HUM",  "%.0f %%",   50},
+    {"PRESSURE", "PRES", "%.0f hPa",  20},
+    {"LIGHT",    "LUX",  "%.0f lux", 100},
+    {"BATTERY",  "BATT", "%.0f %%",  100},
+    {"TETHER",   "TETH", "%.1f kg",   20},
+    {"ALTITUDE", "ALT",  "%.0f m",   100},
 };
 
 static float s_latest[N_METRICS];
@@ -74,29 +71,18 @@ struct Tile {
 };
 static Tile s_tiles[N_TILES];
 
-// TRENDS: three selector layouts, each with its own chart card.
-enum { TS_CHIPS, TS_LIST, TS_GROUPS, TS_COUNT };
-static const char* TS_NAMES[TS_COUNT] = {"CHIPS", "LIST", "GROUPS"};
+// TRENDS: metric list (live values) beside a chart card.
 struct TrendView {
-    lv_obj_t* root;
     lv_obj_t* chart;
     lv_chart_series_t* ser;
     lv_obj_t* title;
     lv_obj_t* max;
     lv_obj_t* min;
-    lv_obj_t* style_btn;
 };
-static TrendView s_tv[TS_COUNT];
-static int s_trend_style = TS_CHIPS;
+static TrendView s_tv;
 static int s_trend_metric = 0;
-static Group s_trend_group = Group::WEATHER;
-static lv_obj_t* s_chips_bm = nullptr;          // TS_CHIPS selector
-static lv_obj_t* s_list_btn[N_METRICS];         // TS_LIST rows
+static lv_obj_t* s_list_btn[N_METRICS];
 static lv_obj_t* s_list_val[N_METRICS];
-static lv_obj_t* s_groups_seg = nullptr;        // TS_GROUPS: WEATHER | DRONE
-static lv_obj_t* s_groups_bm = nullptr;         // TS_GROUPS: metrics of the group
-static const char* s_groups_map[N_METRICS + 1];
-static int s_groups_idx[N_METRICS];             // button -> metric
 
 // STATION
 static lv_obj_t* s_st_state = nullptr;
@@ -205,8 +191,11 @@ void ui_panel_set_station(const StationView& v) {
     lv_bar_set_value(s_st_altbar, (int32_t)fminf(1000.0f, v.alt / top * 1000.0f), LV_ANIM_ON);
     int ty = s_altbar_y + ALTBAR_H - (int)(v.tgt / top * ALTBAR_H) - 2;
     lv_obj_set_y(s_st_tgt, ty);
-    lv_label_set_text_fmt(s_st_alt, "%.0f m", (double)v.alt);
-    lv_label_set_text_fmt(s_st_alt_sub, "target %.0f m", (double)v.tgt);
+    // (LVGL's own formatter has no float support: format with snprintf)
+    snprintf(buf, sizeof(buf), "%.0f m", (double)v.alt);
+    lv_label_set_text(s_st_alt, buf);
+    snprintf(buf, sizeof(buf), "target %.0f m", (double)v.tgt);
+    lv_label_set_text(s_st_alt_sub, buf);
 
     Sev bs = v.batt <= 20 ? Sev::DANGER : v.batt <= 40 ? Sev::WARN : Sev::OK;
     lv_arc_set_value(s_st_batt_arc, v.batt);
@@ -219,7 +208,8 @@ void ui_panel_set_station(const StationView& v) {
     Sev ts = v.tether >= 20 ? Sev::DANGER : v.tether >= 16 ? Sev::WARN : Sev::OK;
     lv_arc_set_value(s_st_teth_arc, (int32_t)(v.tether * 10));
     lv_obj_set_style_arc_color(s_st_teth_arc, ts == Sev::OK ? theme::aqua() : theme::sev_color(ts), LV_PART_INDICATOR);
-    lv_label_set_text_fmt(s_st_teth, "%.1f kg", (double)v.tether);
+    snprintf(buf, sizeof(buf), "%.1f kg", (double)v.tether);
+    lv_label_set_text(s_st_teth, buf);
 
     lv_label_set_text_fmt(s_st_host, "%s  %s", v.host, v.ip[0] ? v.ip : "no network");
     lv_label_set_text(s_st_msg, v.msg);
@@ -250,7 +240,7 @@ static void fit_range(lv_obj_t* chart, const int32_t* pts, int n, int32_t min_sp
 }
 
 static void refresh_trend() {
-    TrendView& tv = s_tv[s_trend_style];
+    TrendView& tv = s_tv;
     const MetricInfo& mi = METRICS[s_trend_metric];
     int32_t lo, hi;
     lv_chart_set_ext_y_array(tv.chart, tv.ser, s_hist[s_trend_metric]);
@@ -329,6 +319,13 @@ static void land_alert(const char* text, int beeps, uint32_t beep_freq, uint32_t
     lv_obj_set_width(s_land_fill, 0);
     lv_obj_set_style_bg_color(s_land_btn, theme::red_dark(), 0);
     lv_label_set_text(s_land_label, text);
+}
+
+void ui_panel_remote_land(const char* text) {
+    if (s_landing) return;              // already alerting (e.g. our own press)
+    s_pressing = false;
+    land_alert(text, 3, 1760, LANDING_SHOW_MS);
+    apply_pill("LANDING", Sev::DANGER);
 }
 
 void ui_panel_land_result(bool accepted) {
@@ -548,34 +545,12 @@ static void build_dashboard(lv_obj_t* page) {
 
 // ── TRENDS ───────────────────────────────────────────────────────────
 
-static void select_trend_metric(int m);
-
-static void style_cycle_cb(lv_event_t*) {
-    lv_obj_add_flag(s_tv[s_trend_style].root, LV_OBJ_FLAG_HIDDEN);
-    s_trend_style = (s_trend_style + 1) % TS_COUNT;
-    lv_obj_remove_flag(s_tv[s_trend_style].root, LV_OBJ_FLAG_HIDDEN);
-    select_trend_metric(s_trend_metric);   // re-sync the new layout's selector
-}
-
-// Chart card: title, LAYOUT button, chart with min/max, time axis.
-static void build_trend_card(TrendView& tv, lv_obj_t* parent, int x, int y, int w, int h, int style) {
+// Chart card: title, chart with min/max, time axis.
+static void build_trend_card(TrendView& tv, lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_t* card = make_card(parent, x, y, w, h);
 
     tv.title = make_label(card, "", &lv_font_montserrat_20, theme::text());
     lv_obj_set_pos(tv.title, 12, 10);
-
-    tv.style_btn = lv_button_create(card);
-    lv_obj_remove_style_all(tv.style_btn);
-    lv_obj_set_size(tv.style_btn, 108, 32);
-    lv_obj_align(tv.style_btn, LV_ALIGN_TOP_RIGHT, -8, 6);
-    lv_obj_set_style_radius(tv.style_btn, 8, 0);
-    lv_obj_set_style_bg_color(tv.style_btn, theme::surface_hi(), 0);
-    lv_obj_set_style_bg_opa(tv.style_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(tv.style_btn, theme::teal(), LV_STATE_PRESSED);
-    lv_obj_add_event_cb(tv.style_btn, style_cycle_cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t* bl = make_label(tv.style_btn, "", &lv_font_montserrat_14, theme::text_muted());
-    lv_label_set_text_fmt(bl, LV_SYMBOL_LOOP " %s %d/%d", TS_NAMES[style], style + 1, TS_COUNT);
-    lv_obj_center(bl);
 
     tv.chart = make_line_chart(card, HIST_N);
     lv_obj_set_size(tv.chart, w - 24, h - 72);
@@ -596,153 +571,50 @@ static void build_trend_card(TrendView& tv, lv_obj_t* parent, int x, int y, int 
     lv_obj_align(t, LV_ALIGN_BOTTOM_RIGHT, -12, -6);
 }
 
-static void fill_groups_map() {
-    int n = 0;
-    for (int m = 0; m < N_METRICS; m++) {
-        if (METRICS[m].group != s_trend_group) continue;
-        s_groups_idx[n] = m;
-        s_groups_map[n++] = METRICS[m].tab;
-    }
-    s_groups_map[n] = "";
-}
-
-static void rebuild_groups_map() {
-    fill_groups_map();
-    lv_buttonmatrix_set_map(s_groups_bm, s_groups_map);
-    lv_buttonmatrix_set_button_ctrl_all(s_groups_bm, LV_BUTTONMATRIX_CTRL_CHECKABLE);
-}
-
-// Select a metric and sync whichever selector is showing.
 static void select_trend_metric(int m) {
     s_trend_metric = m;
-    switch (s_trend_style) {
-    case TS_CHIPS:
-        lv_buttonmatrix_set_button_ctrl(s_chips_bm, (uint32_t)m, LV_BUTTONMATRIX_CTRL_CHECKED);
-        break;
-    case TS_LIST:
-        for (int i = 0; i < N_METRICS; i++) {
-            if (i == m) lv_obj_add_state(s_list_btn[i], LV_STATE_CHECKED);
-            else lv_obj_remove_state(s_list_btn[i], LV_STATE_CHECKED);
-        }
-        lv_obj_scroll_to_view(s_list_btn[m], LV_ANIM_ON);
-        break;
-    case TS_GROUPS:
-        if (METRICS[m].group != s_trend_group) {
-            s_trend_group = METRICS[m].group;
-            rebuild_groups_map();
-        }
-        lv_buttonmatrix_set_button_ctrl(s_groups_seg, s_trend_group == Group::WEATHER ? 0 : 1,
-                                        LV_BUTTONMATRIX_CTRL_CHECKED);
-        for (int i = 0; s_groups_map[i][0]; i++) {
-            if (s_groups_idx[i] == m)
-                lv_buttonmatrix_set_button_ctrl(s_groups_bm, (uint32_t)i, LV_BUTTONMATRIX_CTRL_CHECKED);
-        }
-        break;
+    for (int i = 0; i < N_METRICS; i++) {
+        if (i == m) lv_obj_add_state(s_list_btn[i], LV_STATE_CHECKED);
+        else lv_obj_remove_state(s_list_btn[i], LV_STATE_CHECKED);
     }
+    lv_obj_scroll_to_view(s_list_btn[m], LV_ANIM_ON);
     refresh_trend();
-}
-
-static void chips_cb(lv_event_t* e) {
-    uint32_t sel = lv_buttonmatrix_get_selected_button((lv_obj_t*)lv_event_get_target(e));
-    if (sel < (uint32_t)N_METRICS) select_trend_metric((int)sel);
 }
 
 static void list_cb(lv_event_t* e) {
     select_trend_metric((int)(intptr_t)lv_event_get_user_data(e));
 }
 
-static void groups_seg_cb(lv_event_t* e) {
-    uint32_t sel = lv_buttonmatrix_get_selected_button((lv_obj_t*)lv_event_get_target(e));
-    if (sel > 1) return;
-    s_trend_group = sel == 0 ? Group::WEATHER : Group::DRONE;
-    rebuild_groups_map();
-    for (int m = 0; m < N_METRICS; m++) {          // first metric of the group
-        if (METRICS[m].group == s_trend_group) { select_trend_metric(m); break; }
-    }
-}
-
-static void groups_bm_cb(lv_event_t* e) {
-    uint32_t sel = lv_buttonmatrix_get_selected_button((lv_obj_t*)lv_event_get_target(e));
-    if (sel < (uint32_t)N_METRICS && s_groups_map[sel][0]) select_trend_metric(s_groups_idx[sel]);
-}
-
-static lv_obj_t* make_view_root(lv_obj_t* page) {
-    lv_obj_t* r = make_plain(page);
-    lv_obj_set_size(r, W, BODY_H);
-    lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
-    return r;
-}
-
+// Scrolling list of metrics with live values, chart beside it.
 static void build_trends(lv_obj_t* page) {
-    // CHIPS: one row of metric chips above a full-width chart
-    {
-        TrendView& tv = s_tv[TS_CHIPS];
-        tv.root = make_view_root(page);
-        static const char* map[N_METRICS + 1];
-        for (int m = 0; m < N_METRICS; m++) map[m] = METRICS[m].tab;
-        map[N_METRICS] = "";
-        s_chips_bm = make_segmented(tv.root, map, &lv_font_montserrat_14, 8);
-        lv_obj_set_size(s_chips_bm, W - 2 * GAP, 46);
-        lv_obj_set_pos(s_chips_bm, GAP, GAP);
-        lv_obj_add_event_cb(s_chips_bm, chips_cb, LV_EVENT_VALUE_CHANGED, nullptr);
-        build_trend_card(tv, tv.root, GAP, GAP + 46 + GAP, W - 2 * GAP, BODY_H - 46 - 3 * GAP, TS_CHIPS);
+    const int lw = 168;
+    lv_obj_t* list = make_plain(page);
+    lv_obj_set_size(list, lw, BODY_H - 2 * GAP);
+    lv_obj_set_pos(list, GAP, GAP);
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(list, 6, 0);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    for (int m = 0; m < N_METRICS; m++) {
+        lv_obj_t* b = lv_button_create(list);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, lw, 48);
+        lv_obj_set_style_radius(b, 10, 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(b, theme::surface(), 0);
+        lv_obj_set_style_bg_color(b, theme::teal(), LV_STATE_CHECKED);
+        lv_obj_set_style_border_side(b, LV_BORDER_SIDE_LEFT, LV_STATE_CHECKED);
+        lv_obj_set_style_border_width(b, 4, LV_STATE_CHECKED);
+        lv_obj_set_style_border_color(b, theme::aqua(), LV_STATE_CHECKED);
+        lv_obj_add_event_cb(b, list_cb, LV_EVENT_CLICKED, (void*)(intptr_t)m);
+        lv_obj_t* n = make_label(b, METRICS[m].tab, &lv_font_montserrat_14, theme::text_muted());
+        lv_obj_set_style_text_color(n, theme::text(), LV_STATE_CHECKED);
+        lv_obj_align(n, LV_ALIGN_LEFT_MID, 12, 0);
+        s_list_val[m] = make_label(b, "--", &lv_font_montserrat_18, theme::text());
+        lv_obj_align(s_list_val[m], LV_ALIGN_RIGHT_MID, -10, 0);
+        s_list_btn[m] = b;
     }
-    // LIST: scrolling list of metrics with live values, chart beside it
-    {
-        TrendView& tv = s_tv[TS_LIST];
-        tv.root = make_view_root(page);
-        const int lw = 168;
-        lv_obj_t* list = make_plain(tv.root);
-        lv_obj_set_size(list, lw, BODY_H - 2 * GAP);
-        lv_obj_set_pos(list, GAP, GAP);
-        lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_row(list, 6, 0);
-        lv_obj_set_scroll_dir(list, LV_DIR_VER);
-        lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
-        for (int m = 0; m < N_METRICS; m++) {
-            lv_obj_t* b = lv_button_create(list);
-            lv_obj_remove_style_all(b);
-            lv_obj_set_size(b, lw, 48);
-            lv_obj_set_style_radius(b, 10, 0);
-            lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-            lv_obj_set_style_bg_color(b, theme::surface(), 0);
-            lv_obj_set_style_bg_color(b, theme::teal(), LV_STATE_CHECKED);
-            lv_obj_set_style_border_side(b, LV_BORDER_SIDE_LEFT, LV_STATE_CHECKED);
-            lv_obj_set_style_border_width(b, 4, LV_STATE_CHECKED);
-            lv_obj_set_style_border_color(b, theme::aqua(), LV_STATE_CHECKED);
-            lv_obj_add_event_cb(b, list_cb, LV_EVENT_CLICKED, (void*)(intptr_t)m);
-            lv_obj_t* n = make_label(b, METRICS[m].tab, &lv_font_montserrat_14, theme::text_muted());
-            lv_obj_set_style_text_color(n, theme::text(), LV_STATE_CHECKED);
-            lv_obj_align(n, LV_ALIGN_LEFT_MID, 12, 0);
-            s_list_val[m] = make_label(b, "--", &lv_font_montserrat_18, theme::text());
-            lv_obj_align(s_list_val[m], LV_ALIGN_RIGHT_MID, -10, 0);
-            s_list_btn[m] = b;
-        }
-        build_trend_card(tv, tv.root, GAP * 2 + lw, GAP, W - 3 * GAP - lw, BODY_H - 2 * GAP, TS_LIST);
-        lv_obj_add_flag(tv.root, LV_OBJ_FLAG_HIDDEN);
-    }
-    // GROUPS: WEATHER | DRONE, then that group's metrics, chart below
-    {
-        TrendView& tv = s_tv[TS_GROUPS];
-        tv.root = make_view_root(page);
-        static const char* seg_map[] = {"WEATHER", "DRONE", ""};
-        s_groups_seg = make_segmented(tv.root, seg_map, &lv_font_montserrat_18, 8);
-        lv_obj_set_size(s_groups_seg, W - 2 * GAP, 42);
-        lv_obj_set_pos(s_groups_seg, GAP, GAP);
-        lv_obj_add_event_cb(s_groups_seg, groups_seg_cb, LV_EVENT_VALUE_CHANGED, nullptr);
-
-        fill_groups_map();
-        s_groups_bm = make_segmented(tv.root, s_groups_map, &lv_font_montserrat_14, 8);
-        lv_obj_set_style_bg_opa(s_groups_bm, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_all(s_groups_bm, 0, 0);
-        lv_obj_set_size(s_groups_bm, W - 2 * GAP, 38);
-        lv_obj_set_pos(s_groups_bm, GAP, GAP + 42 + 6);
-        lv_obj_add_event_cb(s_groups_bm, groups_bm_cb, LV_EVENT_VALUE_CHANGED, nullptr);
-
-        int cy = GAP + 42 + 6 + 38 + 6;
-        build_trend_card(tv, tv.root, GAP, cy, W - 2 * GAP, BODY_H - cy - GAP, TS_GROUPS);
-        lv_obj_add_flag(tv.root, LV_OBJ_FLAG_HIDDEN);
-    }
+    build_trend_card(s_tv, page, GAP * 2 + lw, GAP, W - 3 * GAP - lw, BODY_H - 2 * GAP);
     select_trend_metric(0);
 }
 
@@ -818,16 +690,16 @@ static void build_station(lv_obj_t* page) {
 
     // Battery + tether: 270-degree arcs with the value in the middle
     s_st_batt_arc = make_gauge_arc(card, col_w + (col_w - arc) / 2, gauge_y, arc, 100);
-    s_st_batt = make_label(card, "--", &lv_font_montserrat_24, theme::text());
-    lv_obj_align_to(s_st_batt, s_st_batt_arc, LV_ALIGN_CENTER, 0, 0);
-    s_st_power = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
-    lv_obj_align_to(s_st_power, s_st_batt_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, -14);
+    s_st_batt = make_label(s_st_batt_arc, "--", &lv_font_montserrat_24, theme::text());
+    lv_obj_center(s_st_batt);
+    s_st_power = make_label(s_st_batt_arc, "", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_align(s_st_power, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     s_st_teth_arc = make_gauge_arc(card, 2 * col_w + (col_w - arc) / 2, gauge_y, arc, 250);
-    s_st_teth = make_label(card, "--", &lv_font_montserrat_20, theme::text());
-    lv_obj_align_to(s_st_teth, s_st_teth_arc, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_t* of = make_label(card, "of 25 kg", &lv_font_montserrat_14, theme::text_muted());
-    lv_obj_align_to(of, s_st_teth_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, -14);
+    s_st_teth = make_label(s_st_teth_arc, "--", &lv_font_montserrat_20, theme::text());
+    lv_obj_center(s_st_teth);
+    lv_obj_t* of = make_label(s_st_teth_arc, "of 25 kg", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_align(of, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     // Bottom: host + IP, top alert
     lv_obj_t* rule = make_plain(card);
