@@ -127,6 +127,7 @@ static void on_status(const char* j) {
     jstr(j, "ip", st.ip, sizeof(st.ip));
     jstr(j, "host", st.host, sizeof(st.host));
     jstr(j, "msg", st.msg, sizeof(st.msg));
+    jstr(j, "clr", st.clr, sizeof(st.clr));
     if (jnum(j, "batt", &f)) st.batt = (int)f;
     if (jnum(j, "alt", &f)) st.alt = f;
     if (jnum(j, "tgt", &f)) st.tgt = f;
@@ -152,6 +153,7 @@ static void on_status(const char* j) {
     v.host = st.host;
     v.ip = st.ip;
     v.msg = st.msg;
+    v.clearance = st.clr;
     v.alt = st.alt;
     v.tgt = st.tgt;
     v.batt = st.batt;

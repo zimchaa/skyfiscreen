@@ -26,6 +26,7 @@ struct PiStatus {
     char ip[16];
     char host[24];
     char msg[44];
+    char clr[28];     // pre-flight clearance, e.g. "CLEARED until 09:21"
 };
 
 void pilink_init();

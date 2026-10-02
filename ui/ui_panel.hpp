@@ -38,6 +38,7 @@ struct StationView {
     const char* host;
     const char* ip;
     const char* msg;        // top alert, may be ""
+    const char* clearance;  // "CLEARED until hh:mm" | "OVERRIDE until ..." | "NO PRE-FLIGHT"
     float alt, tgt;         // m
     int batt;               // %
     float tether;           // kg

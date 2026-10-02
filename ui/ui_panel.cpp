@@ -88,6 +88,7 @@ static lv_obj_t* s_list_val[N_METRICS];
 static lv_obj_t* s_st_state = nullptr;
 static lv_obj_t* s_st_auto = nullptr;
 static lv_obj_t* s_st_auto_lbl = nullptr;
+static lv_obj_t* s_st_clr = nullptr;
 static lv_obj_t* s_st_altbar = nullptr;
 static lv_obj_t* s_st_tgt = nullptr;
 static lv_obj_t* s_st_alt = nullptr;
@@ -159,6 +160,7 @@ void ui_panel_set_station(const StationView& v) {
         lv_label_set_text(s_st_state, "PI OFFLINE");
         lv_obj_set_style_text_color(s_st_state, theme::danger(), 0);
         lv_obj_add_flag(s_st_auto, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_st_clr, "");
         lv_bar_set_value(s_st_altbar, 0, LV_ANIM_OFF);
         lv_label_set_text(s_st_alt, "--");
         lv_label_set_text(s_st_alt_sub, "");
@@ -181,6 +183,12 @@ void ui_panel_set_station(const StationView& v) {
     else if (!strcmp(v.drone, "ascending")) sc = theme::aqua();
     else if (!strcmp(v.drone, "descending")) sc = theme::danger();
     lv_obj_set_style_text_color(s_st_state, sc, 0);
+
+    // Pre-flight clearance: is a launch permitted right now?
+    const char* clr = v.clearance && v.clearance[0] ? v.clearance : "NO PRE-FLIGHT";
+    lv_label_set_text_fmt(s_st_clr, "PRE-FLIGHT: %s", clr);
+    lv_obj_set_style_text_color(s_st_clr, !strncmp(clr, "CLEARED", 7) ? theme::ok()
+                                        : !strncmp(clr, "OVERRIDE", 8) ? theme::warn() : theme::danger(), 0);
 
     lv_obj_remove_flag(s_st_auto, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_st_auto_lbl, v.autoland ? "AUTO-LAND ARMED" : "AUTO-LAND OFF");
@@ -653,9 +661,11 @@ static void build_station(lv_obj_t* page) {
     s_st_auto_lbl = make_label(s_st_auto, "", &lv_font_montserrat_14, lv_color_hex(0x141618));
     lv_obj_center(s_st_auto_lbl);
     lv_obj_add_flag(s_st_auto, LV_OBJ_FLAG_HIDDEN);
+    s_st_clr = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_set_pos(s_st_clr, 16, 44);
 
     // Three gauge columns
-    const int col_w = cw / 3, gy = 54;
+    const int col_w = cw / 3, gy = 66;
     const char* titles[3] = {"ALTITUDE", "BATTERY", "TETHER"};
     for (int i = 0; i < 3; i++) {
         lv_obj_t* t = make_label(card, titles[i], &lv_font_montserrat_14, theme::text_muted());
