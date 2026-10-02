@@ -129,6 +129,7 @@ static void on_status(const char* j) {
     jstr(j, "msg", st.msg, sizeof(st.msg));
     if (jnum(j, "batt", &f)) st.batt = (int)f;
     if (jnum(j, "alt", &f)) st.alt = f;
+    if (jnum(j, "tgt", &f)) st.tgt = f;
     if (jnum(j, "tether", &f)) st.tether = f;
     s_status = st;
     s_last_status_ms = lv_tick_get();
@@ -142,28 +143,27 @@ static void on_status(const char* j) {
         ui_panel_set_status(sev == Sev::OK ? "SYSTEM OK" : sev == Sev::WARN ? "DEGRADED" : "FAULT", sev);
     }
 
-    char drone[12];
-    snprintf(drone, sizeof(drone), "%s", st.drone);
-    for (char* c = drone; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
-    char text[240];
-    snprintf(text, sizeof(text),
-             "%s  %s\n"
-             "DRONE  %s  %.0f m\n"
-             "BATT  %d%%  (%s)\n"
-             "TETHER  %.1f kg\n"
-             "AUTO-LAND  %s\n"
-             "%s",
-             st.host, st.ip[0] ? st.ip : "no network",
-             drone, (double)st.alt, st.batt, st.power, (double)st.tether,
-             strcmp(st.autoland, "armed") == 0 ? "armed" : "OFF",
-             st.msg);
-    ui_panel_set_station(text, sev);
+    StationView v = {};
+    v.online = true;
+    v.sys = sev;
+    v.drone = st.drone;
+    v.power = st.power;
+    v.autoland = strcmp(st.autoland, "armed") == 0;
+    v.host = st.host;
+    v.ip = st.ip;
+    v.msg = st.msg;
+    v.alt = st.alt;
+    v.tgt = st.tgt;
+    v.batt = st.batt;
+    v.tether = st.tether;
+    ui_panel_set_station(v);
 
     // Drone telemetry tiles (thresholds mirror the server's defaults).
     Sev batt = st.batt <= 20 ? Sev::DANGER : st.batt <= 40 ? Sev::WARN : Sev::OK;
     Sev teth = st.tether >= 20 ? Sev::DANGER : st.tether >= 16 ? Sev::WARN : Sev::OK;
     ui_panel_set_metric(Metric::BATT, (float)st.batt, batt);
     ui_panel_set_metric(Metric::TETHER, st.tether, teth);
+    ui_panel_set_metric(Metric::ALT, st.alt, Sev::OK);
 
     if (!ui_panel_is_landing()) {
         switch (sev) {
@@ -248,7 +248,10 @@ void pilink_task() {
             if (!ui_panel_is_landing()) leds_set(60, 0, 0);
             ui_panel_set_metric(Metric::BATT, NAN, Sev::WARN);
             ui_panel_set_metric(Metric::TETHER, NAN, Sev::WARN);
-            ui_panel_set_station("Pi not responding on USB.\nLAND falls back to WiFi\nif configured.", Sev::DANGER);
+            ui_panel_set_metric(Metric::ALT, NAN, Sev::WARN);
+            StationView v = {};
+            v.online = false;
+            ui_panel_set_station(v);
         }
     }
 

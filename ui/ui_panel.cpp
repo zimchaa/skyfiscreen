@@ -12,9 +12,8 @@ using theme::Sev;
 static const int W        = 480;
 static const int HEADER_H = 56;
 static const int FOOTER_H = 96;
-static const int TABBAR_H = 52;
-static const int TABS_H   = 480 - HEADER_H - FOOTER_H;   // 328, incl. tab bar
-static const int BODY_H   = TABS_H - TABBAR_H;           // 276
+static const int SEG_H    = 52;                                  // segmented tabs
+static const int BODY_H   = 480 - HEADER_H - SEG_H - FOOTER_H;   // 276
 static const int GAP      = 8;
 
 static const uint32_t HOLD_TO_LAND_MS = 1500;
@@ -27,33 +26,45 @@ static const uint32_t SAMPLE_MS = 5000;
 static const int SPARK_N = 60;
 static const int HIST_N  = 720;
 static const int N_METRICS = (int)Metric::COUNT;
+static const int N_TILES = 9;            // ALT is trends-only
+
+enum class Group { WEATHER, DRONE };
 
 struct MetricInfo {
     const char* name;       // tile label
-    const char* tab;        // TRENDS button (short)
+    const char* tab;        // short selector label
     const char* fmt;        // printf for the value
     int32_t min_span;       // smallest y range shown (x10), so noise stays flat
+    Group group;
 };
 static const MetricInfo METRICS[N_METRICS] = {
-    {"WIND",     "WIND", "%.1f m/s",  20},
-    {"GUST",     "GUST", "%.1f m/s",  20},
-    {"RAIN",     "RAIN", "%.1f mm/h", 10},
-    {"TEMP",     "TEMP", "%.1f C",    20},
-    {"HUMIDITY", "HUM",  "%.0f %%",   50},
-    {"PRESSURE", "PRES", "%.0f hPa",  20},
-    {"LIGHT",    "LUX",  "%.0f lux", 100},
-    {"BATTERY",  "BATT", "%.0f %%",  100},
-    {"TETHER",   "TETH", "%.1f kg",   20},
+    {"WIND",     "WIND", "%.1f m/s",  20, Group::WEATHER},
+    {"GUST",     "GUST", "%.1f m/s",  20, Group::WEATHER},
+    {"RAIN",     "RAIN", "%.1f mm/h", 10, Group::WEATHER},
+    {"TEMP",     "TEMP", "%.1f C",    20, Group::WEATHER},
+    {"HUMIDITY", "HUM",  "%.0f %%",   50, Group::WEATHER},
+    {"PRESSURE", "PRES", "%.0f hPa",  20, Group::WEATHER},
+    {"LIGHT",    "LUX",  "%.0f lux", 100, Group::WEATHER},
+    {"BATTERY",  "BATT", "%.0f %%",  100, Group::DRONE},
+    {"TETHER",   "TETH", "%.1f kg",   20, Group::DRONE},
+    {"ALTITUDE", "ALT",  "%.0f m",   100, Group::DRONE},
 };
 
 static float s_latest[N_METRICS];
 static Sev s_sev[N_METRICS];
 static int32_t* s_hist[N_METRICS];      // HIST_N each, in the LVGL (PSRAM) heap
 
+static void fmt_metric(int m, char* buf, size_t n) {
+    if (std::isnan(s_latest[m])) snprintf(buf, n, "--");
+    else snprintf(buf, n, METRICS[m].fmt, (double)s_latest[m]);
+}
+
 // ── Widgets ──────────────────────────────────────────────────────────
 static lv_obj_t* s_pill = nullptr;
 static lv_obj_t* s_pill_label = nullptr;
 static lv_obj_t* s_link = nullptr;
+static lv_obj_t* s_tabview = nullptr;
+static lv_obj_t* s_seg = nullptr;
 
 struct Tile {
     lv_obj_t* strip;
@@ -61,17 +72,49 @@ struct Tile {
     lv_obj_t* chart;
     lv_chart_series_t* ser;
 };
-static Tile s_tiles[N_METRICS];
+static Tile s_tiles[N_TILES];
 
-static lv_obj_t* s_trend_chart = nullptr;
-static lv_chart_series_t* s_trend_ser = nullptr;
-static lv_obj_t* s_trend_title = nullptr;
-static lv_obj_t* s_trend_max = nullptr;
-static lv_obj_t* s_trend_min = nullptr;
+// TRENDS: three selector layouts, each with its own chart card.
+enum { TS_CHIPS, TS_LIST, TS_GROUPS, TS_COUNT };
+static const char* TS_NAMES[TS_COUNT] = {"CHIPS", "LIST", "GROUPS"};
+struct TrendView {
+    lv_obj_t* root;
+    lv_obj_t* chart;
+    lv_chart_series_t* ser;
+    lv_obj_t* title;
+    lv_obj_t* max;
+    lv_obj_t* min;
+    lv_obj_t* style_btn;
+};
+static TrendView s_tv[TS_COUNT];
+static int s_trend_style = TS_CHIPS;
 static int s_trend_metric = 0;
+static Group s_trend_group = Group::WEATHER;
+static lv_obj_t* s_chips_bm = nullptr;          // TS_CHIPS selector
+static lv_obj_t* s_list_btn[N_METRICS];         // TS_LIST rows
+static lv_obj_t* s_list_val[N_METRICS];
+static lv_obj_t* s_groups_seg = nullptr;        // TS_GROUPS: WEATHER | DRONE
+static lv_obj_t* s_groups_bm = nullptr;         // TS_GROUPS: metrics of the group
+static const char* s_groups_map[N_METRICS + 1];
+static int s_groups_idx[N_METRICS];             // button -> metric
 
-static lv_obj_t* s_station = nullptr;
-static lv_obj_t* s_station_strip = nullptr;
+// STATION
+static lv_obj_t* s_st_state = nullptr;
+static lv_obj_t* s_st_auto = nullptr;
+static lv_obj_t* s_st_auto_lbl = nullptr;
+static lv_obj_t* s_st_altbar = nullptr;
+static lv_obj_t* s_st_tgt = nullptr;
+static lv_obj_t* s_st_alt = nullptr;
+static lv_obj_t* s_st_alt_sub = nullptr;
+static lv_obj_t* s_st_batt_arc = nullptr;
+static lv_obj_t* s_st_batt = nullptr;
+static lv_obj_t* s_st_power = nullptr;
+static lv_obj_t* s_st_teth_arc = nullptr;
+static lv_obj_t* s_st_teth = nullptr;
+static lv_obj_t* s_st_host = nullptr;
+static lv_obj_t* s_st_msg = nullptr;
+static const int ALTBAR_H = 104;
+static int s_altbar_y = 0;
 
 static lv_obj_t* s_qr = nullptr;
 static lv_obj_t* s_qr_ssid = nullptr;
@@ -116,15 +159,71 @@ void ui_panel_set_link(bool online) {
     lv_obj_set_style_text_color(s_link, online ? theme::ok() : theme::danger(), 0);
 }
 
-void ui_panel_set_station(const char* text, Sev sev) {
-    lv_label_set_text(s_station, text);
-    lv_obj_set_style_bg_color(s_station_strip, theme::sev_color(sev), 0);
-}
-
 void ui_panel_set_wifi(const char* ssid, const char* password, const char* qr_data) {
     lv_qrcode_update(s_qr, qr_data, (uint32_t)strlen(qr_data));
     lv_label_set_text_fmt(s_qr_ssid, "%s", ssid);
     lv_label_set_text_fmt(s_qr_pw, "password: %s", password);
+}
+
+// ── STATION ──────────────────────────────────────────────────────────
+
+void ui_panel_set_station(const StationView& v) {
+    char buf[64];
+    if (!v.online) {
+        lv_label_set_text(s_st_state, "PI OFFLINE");
+        lv_obj_set_style_text_color(s_st_state, theme::danger(), 0);
+        lv_obj_add_flag(s_st_auto, LV_OBJ_FLAG_HIDDEN);
+        lv_bar_set_value(s_st_altbar, 0, LV_ANIM_OFF);
+        lv_label_set_text(s_st_alt, "--");
+        lv_label_set_text(s_st_alt_sub, "");
+        lv_arc_set_value(s_st_batt_arc, 0);
+        lv_label_set_text(s_st_batt, "--");
+        lv_label_set_text(s_st_power, "");
+        lv_arc_set_value(s_st_teth_arc, 0);
+        lv_label_set_text(s_st_teth, "--");
+        lv_label_set_text(s_st_host, "No status from the Pi over USB");
+        lv_label_set_text(s_st_msg, "");
+        return;
+    }
+
+    // Drone state, coloured by motion
+    snprintf(buf, sizeof(buf), "%s", v.drone);
+    for (char* c = buf; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+    lv_label_set_text(s_st_state, buf);
+    lv_color_t sc = theme::text();
+    if (!strcmp(v.drone, "airborne")) sc = theme::ok();
+    else if (!strcmp(v.drone, "ascending")) sc = theme::aqua();
+    else if (!strcmp(v.drone, "descending")) sc = theme::danger();
+    lv_obj_set_style_text_color(s_st_state, sc, 0);
+
+    lv_obj_remove_flag(s_st_auto, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_st_auto_lbl, v.autoland ? "AUTO-LAND ARMED" : "AUTO-LAND OFF");
+    lv_obj_set_style_bg_color(s_st_auto, v.autoland ? theme::ok() : theme::danger(), 0);
+
+    // Altitude bar scaled to 125% of the target, with the target marked
+    float top = fmaxf(v.tgt * 1.25f, 10.0f);
+    lv_bar_set_value(s_st_altbar, (int32_t)fminf(1000.0f, v.alt / top * 1000.0f), LV_ANIM_ON);
+    int ty = s_altbar_y + ALTBAR_H - (int)(v.tgt / top * ALTBAR_H) - 2;
+    lv_obj_set_y(s_st_tgt, ty);
+    lv_label_set_text_fmt(s_st_alt, "%.0f m", (double)v.alt);
+    lv_label_set_text_fmt(s_st_alt_sub, "target %.0f m", (double)v.tgt);
+
+    Sev bs = v.batt <= 20 ? Sev::DANGER : v.batt <= 40 ? Sev::WARN : Sev::OK;
+    lv_arc_set_value(s_st_batt_arc, v.batt);
+    lv_obj_set_style_arc_color(s_st_batt_arc, theme::sev_color(bs), LV_PART_INDICATOR);
+    lv_label_set_text_fmt(s_st_batt, "%d%%", v.batt);
+    bool on_batt = !strcmp(v.power, "battery");
+    lv_label_set_text(s_st_power, on_batt ? "ON BATTERY" : "tether power");
+    lv_obj_set_style_text_color(s_st_power, on_batt ? theme::warn() : theme::text_muted(), 0);
+
+    Sev ts = v.tether >= 20 ? Sev::DANGER : v.tether >= 16 ? Sev::WARN : Sev::OK;
+    lv_arc_set_value(s_st_teth_arc, (int32_t)(v.tether * 10));
+    lv_obj_set_style_arc_color(s_st_teth_arc, ts == Sev::OK ? theme::aqua() : theme::sev_color(ts), LV_PART_INDICATOR);
+    lv_label_set_text_fmt(s_st_teth, "%.1f kg", (double)v.tether);
+
+    lv_label_set_text_fmt(s_st_host, "%s  %s", v.host, v.ip[0] ? v.ip : "no network");
+    lv_label_set_text(s_st_msg, v.msg);
+    lv_obj_set_style_text_color(s_st_msg, theme::sev_color(v.sys), 0);
 }
 
 // ── Charts ───────────────────────────────────────────────────────────
@@ -151,25 +250,35 @@ static void fit_range(lv_obj_t* chart, const int32_t* pts, int n, int32_t min_sp
 }
 
 static void refresh_trend() {
+    TrendView& tv = s_tv[s_trend_style];
     const MetricInfo& mi = METRICS[s_trend_metric];
     int32_t lo, hi;
-    lv_chart_set_ext_y_array(s_trend_chart, s_trend_ser, s_hist[s_trend_metric]);
-    fit_range(s_trend_chart, s_hist[s_trend_metric], HIST_N, mi.min_span, &lo, &hi);
-    lv_chart_refresh(s_trend_chart);
+    lv_chart_set_ext_y_array(tv.chart, tv.ser, s_hist[s_trend_metric]);
+    fit_range(tv.chart, s_hist[s_trend_metric], HIST_N, mi.min_span, &lo, &hi);
+    lv_chart_refresh(tv.chart);
 
-    char v[24] = "--";
-    if (!std::isnan(s_latest[s_trend_metric])) snprintf(v, sizeof(v), mi.fmt, (double)s_latest[s_trend_metric]);
-    lv_label_set_text_fmt(s_trend_title, "%s  %s   (last 60 min)", mi.name, v);
+    char v[24];
+    fmt_metric(s_trend_metric, v, sizeof(v));
+    lv_label_set_text_fmt(tv.title, "%s  %s", mi.name, v);
     bool any = false;
     for (int i = 0; i < HIST_N && !any; i++) any = s_hist[s_trend_metric][i] != LV_CHART_POINT_NONE;
     if (any) {
         snprintf(v, sizeof(v), mi.fmt, hi / 10.0);
-        lv_label_set_text_fmt(s_trend_max, "max %s", v);
+        lv_label_set_text_fmt(tv.max, "max %s", v);
         snprintf(v, sizeof(v), mi.fmt, lo / 10.0);
-        lv_label_set_text_fmt(s_trend_min, "min %s", v);
+        lv_label_set_text_fmt(tv.min, "min %s", v);
     } else {
-        lv_label_set_text(s_trend_max, "");
-        lv_label_set_text(s_trend_min, "no data yet");
+        lv_label_set_text(tv.max, "");
+        lv_label_set_text(tv.min, "no data yet");
+    }
+}
+
+// Live values beside the names (LIST layout).
+static void refresh_list_values() {
+    char buf[24];
+    for (int m = 0; m < N_METRICS; m++) {
+        fmt_metric(m, buf, sizeof(buf));
+        lv_label_set_text(s_list_val[m], buf);
     }
 }
 
@@ -179,10 +288,13 @@ static void sample_timer_cb(lv_timer_t*) {
         memmove(h, h + 1, (HIST_N - 1) * sizeof(int32_t));
         h[HIST_N - 1] = std::isnan(s_latest[m]) ? LV_CHART_POINT_NONE
                                                 : (int32_t)lroundf(s_latest[m] * 10.0f);
-        fit_range(s_tiles[m].chart, h + HIST_N - SPARK_N, SPARK_N, METRICS[m].min_span);
-        lv_chart_refresh(s_tiles[m].chart);
+        if (m < N_TILES) {
+            fit_range(s_tiles[m].chart, h + HIST_N - SPARK_N, SPARK_N, METRICS[m].min_span);
+            lv_chart_refresh(s_tiles[m].chart);
+        }
     }
     refresh_trend();
+    refresh_list_values();
 }
 
 void ui_panel_set_metric(Metric metric, float value, Sev sev) {
@@ -190,15 +302,12 @@ void ui_panel_set_metric(Metric metric, float value, Sev sev) {
     if (m < 0 || m >= N_METRICS) return;
     s_latest[m] = value;
     s_sev[m] = sev;
+    if (m >= N_TILES) return;
     char buf[24];
-    if (std::isnan(value)) {
-        lv_label_set_text(s_tiles[m].value, "--");
-        lv_obj_set_style_bg_color(s_tiles[m].strip, theme::text_dim(), 0);
-    } else {
-        snprintf(buf, sizeof(buf), METRICS[m].fmt, (double)value);
-        lv_label_set_text(s_tiles[m].value, buf);
-        lv_obj_set_style_bg_color(s_tiles[m].strip, theme::sev_color(sev), 0);
-    }
+    fmt_metric(m, buf, sizeof(buf));
+    lv_label_set_text(s_tiles[m].value, buf);
+    lv_obj_set_style_bg_color(s_tiles[m].strip,
+                              std::isnan(value) ? theme::text_dim() : theme::sev_color(sev), 0);
 }
 
 // ── Land button behaviour ────────────────────────────────────────────
@@ -299,6 +408,7 @@ static void land_timer_cb(lv_timer_t*) {
     }
 }
 
+
 // ── Construction ─────────────────────────────────────────────────────
 
 static lv_obj_t* make_plain(lv_obj_t* parent) {
@@ -341,6 +451,42 @@ static lv_obj_t* make_line_chart(lv_obj_t* parent, int n_points) {
     return c;
 }
 
+// Segmented-control styling shared by the main tabs and trends selectors:
+// a rounded track, items flat, the checked item raised in teal with an aqua
+// underline.
+static void style_segmented(lv_obj_t* bm, const lv_font_t* font, int radius) {
+    lv_obj_set_style_bg_color(bm, theme::surface(), 0);
+    lv_obj_set_style_bg_opa(bm, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(bm, radius + 4, 0);
+    lv_obj_set_style_border_width(bm, 0, 0);
+    lv_obj_set_style_pad_all(bm, 4, 0);
+    lv_obj_set_style_pad_gap(bm, 4, 0);
+    lv_obj_set_style_bg_opa(bm, LV_OPA_TRANSP, LV_PART_ITEMS);
+    lv_obj_set_style_radius(bm, radius, LV_PART_ITEMS);
+    lv_obj_set_style_shadow_width(bm, 0, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(bm, 0, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(bm, font, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(bm, theme::text_muted(), LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(bm, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(bm, theme::teal(), LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(bm, theme::text(), LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_border_side(bm, LV_BORDER_SIDE_BOTTOM, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_border_width(bm, 3, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(bm, theme::aqua(), LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(bm, theme::surface_hi(), LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(bm, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_PRESSED);
+}
+
+static lv_obj_t* make_segmented(lv_obj_t* parent, const char* const* map, const lv_font_t* font, int radius) {
+    lv_obj_t* bm = lv_buttonmatrix_create(parent);
+    lv_buttonmatrix_set_map(bm, map);
+    lv_buttonmatrix_set_button_ctrl_all(bm, LV_BUTTONMATRIX_CTRL_CHECKABLE);
+    lv_buttonmatrix_set_one_checked(bm, true);
+    lv_buttonmatrix_set_button_ctrl(bm, 0, LV_BUTTONMATRIX_CTRL_CHECKED);
+    style_segmented(bm, font, radius);
+    return bm;
+}
+
 static void build_header(lv_obj_t* scr) {
     lv_obj_t* bar = make_plain(scr);
     lv_obj_set_size(bar, W, HEADER_H);
@@ -375,7 +521,7 @@ static void build_header(lv_obj_t* scr) {
 static void build_dashboard(lv_obj_t* page) {
     const int w = (W - 4 * GAP) / 3;          // 149
     const int h = (BODY_H - 4 * GAP) / 3;     // 81
-    for (int m = 0; m < N_METRICS; m++) {
+    for (int m = 0; m < N_TILES; m++) {
         int col = m % 3, row = m / 3;
         lv_obj_t* card = make_card(page, GAP + col * (w + GAP), GAP + row * (h + GAP), w, h);
         Tile& t = s_tiles[m];
@@ -400,79 +546,302 @@ static void build_dashboard(lv_obj_t* page) {
     }
 }
 
-static void trend_select_cb(lv_event_t* e) {
-    lv_obj_t* bm = (lv_obj_t*)lv_event_get_target(e);
-    uint32_t sel = lv_buttonmatrix_get_selected_button(bm);
-    if (sel < (uint32_t)N_METRICS) {
-        s_trend_metric = (int)sel;
-        refresh_trend();
-    }
+// ── TRENDS ───────────────────────────────────────────────────────────
+
+static void select_trend_metric(int m);
+
+static void style_cycle_cb(lv_event_t*) {
+    lv_obj_add_flag(s_tv[s_trend_style].root, LV_OBJ_FLAG_HIDDEN);
+    s_trend_style = (s_trend_style + 1) % TS_COUNT;
+    lv_obj_remove_flag(s_tv[s_trend_style].root, LV_OBJ_FLAG_HIDDEN);
+    select_trend_metric(s_trend_metric);   // re-sync the new layout's selector
 }
 
-static void build_trends(lv_obj_t* page) {
-    static const char* map[N_METRICS + 1];
-    for (int m = 0; m < N_METRICS; m++) map[m] = METRICS[m].tab;
-    map[N_METRICS] = "";
+// Chart card: title, LAYOUT button, chart with min/max, time axis.
+static void build_trend_card(TrendView& tv, lv_obj_t* parent, int x, int y, int w, int h, int style) {
+    lv_obj_t* card = make_card(parent, x, y, w, h);
 
-    lv_obj_t* bm = lv_buttonmatrix_create(page);
-    lv_buttonmatrix_set_map(bm, map);
-    lv_buttonmatrix_set_button_ctrl_all(bm, LV_BUTTONMATRIX_CTRL_CHECKABLE);
-    lv_buttonmatrix_set_one_checked(bm, true);
-    lv_buttonmatrix_set_button_ctrl(bm, 0, LV_BUTTONMATRIX_CTRL_CHECKED);
-    lv_obj_set_size(bm, W - 2 * GAP, 44);
-    lv_obj_set_pos(bm, GAP, GAP);
-    lv_obj_set_style_pad_all(bm, 2, 0);
-    lv_obj_set_style_pad_gap(bm, 3, 0);
-    lv_obj_set_style_bg_opa(bm, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(bm, 0, 0);
-    lv_obj_set_style_bg_color(bm, theme::surface(), LV_PART_ITEMS);
-    lv_obj_set_style_text_color(bm, theme::text_muted(), LV_PART_ITEMS);
-    lv_obj_set_style_text_font(bm, &lv_font_montserrat_14, LV_PART_ITEMS);
-    lv_obj_set_style_bg_color(bm, theme::teal(), LV_PART_ITEMS | LV_STATE_CHECKED);
-    lv_obj_set_style_text_color(bm, theme::text(), LV_PART_ITEMS | LV_STATE_CHECKED);
-    lv_obj_add_event_cb(bm, trend_select_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+    tv.title = make_label(card, "", &lv_font_montserrat_20, theme::text());
+    lv_obj_set_pos(tv.title, 12, 10);
 
-    const int card_y = GAP + 44 + GAP;
-    const int card_h = BODY_H - card_y - GAP;
-    lv_obj_t* card = make_card(page, GAP, card_y, W - 2 * GAP, card_h);
+    tv.style_btn = lv_button_create(card);
+    lv_obj_remove_style_all(tv.style_btn);
+    lv_obj_set_size(tv.style_btn, 108, 32);
+    lv_obj_align(tv.style_btn, LV_ALIGN_TOP_RIGHT, -8, 6);
+    lv_obj_set_style_radius(tv.style_btn, 8, 0);
+    lv_obj_set_style_bg_color(tv.style_btn, theme::surface_hi(), 0);
+    lv_obj_set_style_bg_opa(tv.style_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(tv.style_btn, theme::teal(), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(tv.style_btn, style_cycle_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* bl = make_label(tv.style_btn, "", &lv_font_montserrat_14, theme::text_muted());
+    lv_label_set_text_fmt(bl, LV_SYMBOL_LOOP " %s %d/%d", TS_NAMES[style], style + 1, TS_COUNT);
+    lv_obj_center(bl);
 
-    s_trend_title = make_label(card, "", &lv_font_montserrat_20, theme::text());
-    lv_obj_set_pos(s_trend_title, 14, 8);
+    tv.chart = make_line_chart(card, HIST_N);
+    lv_obj_set_size(tv.chart, w - 24, h - 72);
+    lv_obj_set_pos(tv.chart, 12, 44);
+    lv_chart_set_div_line_count(tv.chart, 4, 6);
+    lv_obj_set_style_line_color(tv.chart, theme::surface_hi(), LV_PART_MAIN);
+    lv_obj_set_style_line_width(tv.chart, 1, LV_PART_MAIN);
+    lv_obj_set_style_line_width(tv.chart, 3, LV_PART_ITEMS);
+    tv.ser = lv_chart_add_series(tv.chart, theme::aqua(), LV_CHART_AXIS_PRIMARY_Y);
 
-    s_trend_chart = make_line_chart(card, HIST_N);
-    lv_obj_set_size(s_trend_chart, W - 2 * GAP - 28, card_h - 66);
-    lv_obj_set_pos(s_trend_chart, 14, 38);
-    lv_chart_set_div_line_count(s_trend_chart, 4, 6);
-    lv_obj_set_style_line_color(s_trend_chart, theme::surface_hi(), LV_PART_MAIN);
-    lv_obj_set_style_line_width(s_trend_chart, 3, LV_PART_ITEMS);
-    s_trend_ser = lv_chart_add_series(s_trend_chart, theme::aqua(), LV_CHART_AXIS_PRIMARY_Y);
+    tv.max = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_set_pos(tv.max, 14, 46);
+    tv.min = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_align(tv.min, LV_ALIGN_BOTTOM_LEFT, 12, -6);
+    lv_obj_t* t = make_label(card, "-60 min", &lv_font_montserrat_14, theme::text_dim());
+    lv_obj_align(t, LV_ALIGN_BOTTOM_MID, 0, -6);
+    t = make_label(card, "now", &lv_font_montserrat_14, theme::text_dim());
+    lv_obj_align(t, LV_ALIGN_BOTTOM_RIGHT, -12, -6);
+}
 
-    s_trend_max = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
-    lv_obj_align(s_trend_max, LV_ALIGN_TOP_RIGHT, -14, 12);
-    s_trend_min = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
-    lv_obj_align(s_trend_min, LV_ALIGN_BOTTOM_LEFT, 14, -6);
-    lv_obj_t* now_lbl = make_label(card, "-60 min                                     now",
-                                   &lv_font_montserrat_14, theme::text_dim());
-    lv_obj_align(now_lbl, LV_ALIGN_BOTTOM_RIGHT, -14, -6);
+static void fill_groups_map() {
+    int n = 0;
+    for (int m = 0; m < N_METRICS; m++) {
+        if (METRICS[m].group != s_trend_group) continue;
+        s_groups_idx[n] = m;
+        s_groups_map[n++] = METRICS[m].tab;
+    }
+    s_groups_map[n] = "";
+}
 
+static void rebuild_groups_map() {
+    fill_groups_map();
+    lv_buttonmatrix_set_map(s_groups_bm, s_groups_map);
+    lv_buttonmatrix_set_button_ctrl_all(s_groups_bm, LV_BUTTONMATRIX_CTRL_CHECKABLE);
+}
+
+// Select a metric and sync whichever selector is showing.
+static void select_trend_metric(int m) {
+    s_trend_metric = m;
+    switch (s_trend_style) {
+    case TS_CHIPS:
+        lv_buttonmatrix_set_button_ctrl(s_chips_bm, (uint32_t)m, LV_BUTTONMATRIX_CTRL_CHECKED);
+        break;
+    case TS_LIST:
+        for (int i = 0; i < N_METRICS; i++) {
+            if (i == m) lv_obj_add_state(s_list_btn[i], LV_STATE_CHECKED);
+            else lv_obj_remove_state(s_list_btn[i], LV_STATE_CHECKED);
+        }
+        lv_obj_scroll_to_view(s_list_btn[m], LV_ANIM_ON);
+        break;
+    case TS_GROUPS:
+        if (METRICS[m].group != s_trend_group) {
+            s_trend_group = METRICS[m].group;
+            rebuild_groups_map();
+        }
+        lv_buttonmatrix_set_button_ctrl(s_groups_seg, s_trend_group == Group::WEATHER ? 0 : 1,
+                                        LV_BUTTONMATRIX_CTRL_CHECKED);
+        for (int i = 0; s_groups_map[i][0]; i++) {
+            if (s_groups_idx[i] == m)
+                lv_buttonmatrix_set_button_ctrl(s_groups_bm, (uint32_t)i, LV_BUTTONMATRIX_CTRL_CHECKED);
+        }
+        break;
+    }
     refresh_trend();
 }
 
+static void chips_cb(lv_event_t* e) {
+    uint32_t sel = lv_buttonmatrix_get_selected_button((lv_obj_t*)lv_event_get_target(e));
+    if (sel < (uint32_t)N_METRICS) select_trend_metric((int)sel);
+}
+
+static void list_cb(lv_event_t* e) {
+    select_trend_metric((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+static void groups_seg_cb(lv_event_t* e) {
+    uint32_t sel = lv_buttonmatrix_get_selected_button((lv_obj_t*)lv_event_get_target(e));
+    if (sel > 1) return;
+    s_trend_group = sel == 0 ? Group::WEATHER : Group::DRONE;
+    rebuild_groups_map();
+    for (int m = 0; m < N_METRICS; m++) {          // first metric of the group
+        if (METRICS[m].group == s_trend_group) { select_trend_metric(m); break; }
+    }
+}
+
+static void groups_bm_cb(lv_event_t* e) {
+    uint32_t sel = lv_buttonmatrix_get_selected_button((lv_obj_t*)lv_event_get_target(e));
+    if (sel < (uint32_t)N_METRICS && s_groups_map[sel][0]) select_trend_metric(s_groups_idx[sel]);
+}
+
+static lv_obj_t* make_view_root(lv_obj_t* page) {
+    lv_obj_t* r = make_plain(page);
+    lv_obj_set_size(r, W, BODY_H);
+    lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    return r;
+}
+
+static void build_trends(lv_obj_t* page) {
+    // CHIPS: one row of metric chips above a full-width chart
+    {
+        TrendView& tv = s_tv[TS_CHIPS];
+        tv.root = make_view_root(page);
+        static const char* map[N_METRICS + 1];
+        for (int m = 0; m < N_METRICS; m++) map[m] = METRICS[m].tab;
+        map[N_METRICS] = "";
+        s_chips_bm = make_segmented(tv.root, map, &lv_font_montserrat_14, 8);
+        lv_obj_set_size(s_chips_bm, W - 2 * GAP, 46);
+        lv_obj_set_pos(s_chips_bm, GAP, GAP);
+        lv_obj_add_event_cb(s_chips_bm, chips_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+        build_trend_card(tv, tv.root, GAP, GAP + 46 + GAP, W - 2 * GAP, BODY_H - 46 - 3 * GAP, TS_CHIPS);
+    }
+    // LIST: scrolling list of metrics with live values, chart beside it
+    {
+        TrendView& tv = s_tv[TS_LIST];
+        tv.root = make_view_root(page);
+        const int lw = 168;
+        lv_obj_t* list = make_plain(tv.root);
+        lv_obj_set_size(list, lw, BODY_H - 2 * GAP);
+        lv_obj_set_pos(list, GAP, GAP);
+        lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(list, 6, 0);
+        lv_obj_set_scroll_dir(list, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+        for (int m = 0; m < N_METRICS; m++) {
+            lv_obj_t* b = lv_button_create(list);
+            lv_obj_remove_style_all(b);
+            lv_obj_set_size(b, lw, 48);
+            lv_obj_set_style_radius(b, 10, 0);
+            lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(b, theme::surface(), 0);
+            lv_obj_set_style_bg_color(b, theme::teal(), LV_STATE_CHECKED);
+            lv_obj_set_style_border_side(b, LV_BORDER_SIDE_LEFT, LV_STATE_CHECKED);
+            lv_obj_set_style_border_width(b, 4, LV_STATE_CHECKED);
+            lv_obj_set_style_border_color(b, theme::aqua(), LV_STATE_CHECKED);
+            lv_obj_add_event_cb(b, list_cb, LV_EVENT_CLICKED, (void*)(intptr_t)m);
+            lv_obj_t* n = make_label(b, METRICS[m].tab, &lv_font_montserrat_14, theme::text_muted());
+            lv_obj_set_style_text_color(n, theme::text(), LV_STATE_CHECKED);
+            lv_obj_align(n, LV_ALIGN_LEFT_MID, 12, 0);
+            s_list_val[m] = make_label(b, "--", &lv_font_montserrat_18, theme::text());
+            lv_obj_align(s_list_val[m], LV_ALIGN_RIGHT_MID, -10, 0);
+            s_list_btn[m] = b;
+        }
+        build_trend_card(tv, tv.root, GAP * 2 + lw, GAP, W - 3 * GAP - lw, BODY_H - 2 * GAP, TS_LIST);
+        lv_obj_add_flag(tv.root, LV_OBJ_FLAG_HIDDEN);
+    }
+    // GROUPS: WEATHER | DRONE, then that group's metrics, chart below
+    {
+        TrendView& tv = s_tv[TS_GROUPS];
+        tv.root = make_view_root(page);
+        static const char* seg_map[] = {"WEATHER", "DRONE", ""};
+        s_groups_seg = make_segmented(tv.root, seg_map, &lv_font_montserrat_18, 8);
+        lv_obj_set_size(s_groups_seg, W - 2 * GAP, 42);
+        lv_obj_set_pos(s_groups_seg, GAP, GAP);
+        lv_obj_add_event_cb(s_groups_seg, groups_seg_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+
+        fill_groups_map();
+        s_groups_bm = make_segmented(tv.root, s_groups_map, &lv_font_montserrat_14, 8);
+        lv_obj_set_style_bg_opa(s_groups_bm, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_pad_all(s_groups_bm, 0, 0);
+        lv_obj_set_size(s_groups_bm, W - 2 * GAP, 38);
+        lv_obj_set_pos(s_groups_bm, GAP, GAP + 42 + 6);
+        lv_obj_add_event_cb(s_groups_bm, groups_bm_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+
+        int cy = GAP + 42 + 6 + 38 + 6;
+        build_trend_card(tv, tv.root, GAP, cy, W - 2 * GAP, BODY_H - cy - GAP, TS_GROUPS);
+        lv_obj_add_flag(tv.root, LV_OBJ_FLAG_HIDDEN);
+    }
+    select_trend_metric(0);
+}
+
+// ── STATION ──────────────────────────────────────────────────────────
+
+static lv_obj_t* make_gauge_arc(lv_obj_t* parent, int x, int y, int size, int32_t max) {
+    lv_obj_t* a = lv_arc_create(parent);
+    lv_obj_set_size(a, size, size);
+    lv_obj_set_pos(a, x, y);
+    lv_arc_set_bg_angles(a, 135, 45);           // 270-degree gauge, open at the bottom
+    lv_arc_set_range(a, 0, max);
+    lv_arc_set_value(a, 0);
+    lv_obj_remove_style(a, nullptr, LV_PART_KNOB);
+    lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(a, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(a, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(a, theme::surface_hi(), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(a, theme::ok(), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(a, true, LV_PART_INDICATOR);
+    return a;
+}
+
 static void build_station(lv_obj_t* page) {
-    lv_obj_t* card = make_card(page, GAP, GAP, W - 2 * GAP, BODY_H - 2 * GAP);
+    const int cw = W - 2 * GAP, ch = BODY_H - 2 * GAP;   // 464 x 260
+    lv_obj_t* card = make_card(page, GAP, GAP, cw, ch);
 
-    s_station_strip = make_plain(card);
-    lv_obj_set_size(s_station_strip, 6, BODY_H - 2 * GAP - 24);
-    lv_obj_set_pos(s_station_strip, 10, 12);
-    lv_obj_set_style_radius(s_station_strip, 3, 0);
-    lv_obj_set_style_bg_color(s_station_strip, theme::danger(), 0);
-    lv_obj_set_style_bg_opa(s_station_strip, LV_OPA_COVER, 0);
+    // Top row: drone state + auto-land chip
+    s_st_state = make_label(card, "WAITING FOR PI", &lv_font_montserrat_28, theme::text_muted());
+    lv_obj_set_pos(s_st_state, 16, 10);
+    s_st_auto = make_plain(card);
+    lv_obj_set_size(s_st_auto, 178, 30);
+    lv_obj_align(s_st_auto, LV_ALIGN_TOP_RIGHT, -12, 12);
+    lv_obj_set_style_radius(s_st_auto, 8, 0);
+    lv_obj_set_style_bg_opa(s_st_auto, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_st_auto, theme::surface_hi(), 0);
+    s_st_auto_lbl = make_label(s_st_auto, "", &lv_font_montserrat_14, lv_color_hex(0x141618));
+    lv_obj_center(s_st_auto_lbl);
+    lv_obj_add_flag(s_st_auto, LV_OBJ_FLAG_HIDDEN);
 
-    s_station = make_label(card, "Waiting for the Pi\n(USB link)...", &lv_font_montserrat_20, theme::text());
-    lv_obj_set_width(s_station, W - 2 * GAP - 48);
-    lv_label_set_long_mode(s_station, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_line_space(s_station, 6, 0);
-    lv_obj_set_pos(s_station, 30, 14);
+    // Three gauge columns
+    const int col_w = cw / 3, gy = 54;
+    const char* titles[3] = {"ALTITUDE", "BATTERY", "TETHER"};
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t* t = make_label(card, titles[i], &lv_font_montserrat_14, theme::text_muted());
+        lv_obj_set_width(t, col_w);
+        lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_pos(t, i * col_w, gy);
+    }
+    const int gauge_y = gy + 22, arc = 112;
+
+    // Altitude: vertical bar + target marker, value to the right
+    s_altbar_y = gauge_y + 4;
+    s_st_altbar = lv_bar_create(card);
+    lv_obj_set_size(s_st_altbar, 30, ALTBAR_H);
+    lv_obj_set_pos(s_st_altbar, 30, s_altbar_y);
+    lv_bar_set_range(s_st_altbar, 0, 1000);
+    lv_obj_set_style_radius(s_st_altbar, 8, 0);
+    lv_obj_set_style_radius(s_st_altbar, 8, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_st_altbar, theme::surface_hi(), 0);
+    lv_obj_set_style_bg_opa(s_st_altbar, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_st_altbar, theme::aqua(), LV_PART_INDICATOR);
+    lv_obj_set_style_anim_duration(s_st_altbar, 600, 0);
+    s_st_tgt = make_plain(card);
+    lv_obj_set_size(s_st_tgt, 44, 4);
+    lv_obj_set_pos(s_st_tgt, 23, s_altbar_y + ALTBAR_H);
+    lv_obj_set_style_radius(s_st_tgt, 2, 0);
+    lv_obj_set_style_bg_color(s_st_tgt, theme::text(), 0);
+    lv_obj_set_style_bg_opa(s_st_tgt, LV_OPA_COVER, 0);
+    s_st_alt = make_label(card, "--", &lv_font_montserrat_24, theme::text());
+    lv_obj_set_pos(s_st_alt, 74, gauge_y + 30);
+    s_st_alt_sub = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_set_pos(s_st_alt_sub, 74, gauge_y + 62);
+
+    // Battery + tether: 270-degree arcs with the value in the middle
+    s_st_batt_arc = make_gauge_arc(card, col_w + (col_w - arc) / 2, gauge_y, arc, 100);
+    s_st_batt = make_label(card, "--", &lv_font_montserrat_24, theme::text());
+    lv_obj_align_to(s_st_batt, s_st_batt_arc, LV_ALIGN_CENTER, 0, 0);
+    s_st_power = make_label(card, "", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_align_to(s_st_power, s_st_batt_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, -14);
+
+    s_st_teth_arc = make_gauge_arc(card, 2 * col_w + (col_w - arc) / 2, gauge_y, arc, 250);
+    s_st_teth = make_label(card, "--", &lv_font_montserrat_20, theme::text());
+    lv_obj_align_to(s_st_teth, s_st_teth_arc, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_t* of = make_label(card, "of 25 kg", &lv_font_montserrat_14, theme::text_muted());
+    lv_obj_align_to(of, s_st_teth_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, -14);
+
+    // Bottom: host + IP, top alert
+    lv_obj_t* rule = make_plain(card);
+    lv_obj_set_size(rule, cw - 32, 1);
+    lv_obj_set_pos(rule, 16, ch - 48);
+    lv_obj_set_style_bg_color(rule, theme::surface_hi(), 0);
+    lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
+    s_st_host = make_label(card, "", &lv_font_montserrat_18, theme::text());
+    lv_obj_set_pos(s_st_host, 16, ch - 36);
+    s_st_msg = make_label(card, "", &lv_font_montserrat_14, theme::warn());
+    lv_obj_set_width(s_st_msg, 230);
+    lv_label_set_long_mode(s_st_msg, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_st_msg, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_st_msg, LV_ALIGN_BOTTOM_RIGHT, -16, -12);
 }
 
 static void build_wifi(lv_obj_t* page) {
@@ -516,26 +885,13 @@ static void build_land_button(lv_obj_t* scr) {
     lv_timer_create(land_timer_cb, 30, nullptr);
 }
 
-static void style_tab_bar(lv_obj_t* tv) {
-    lv_obj_t* bar = lv_tabview_get_tab_bar(tv);
-    lv_obj_set_style_bg_color(bar, theme::bg(), 0);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(bar, GAP, 0);
-    lv_obj_set_style_pad_gap(bar, GAP, 0);
-    uint32_t n = lv_obj_get_child_count(bar);
-    for (uint32_t i = 0; i < n; i++) {
-        lv_obj_t* b = lv_obj_get_child(bar, (int32_t)i);
-        lv_obj_set_style_bg_color(b, theme::surface(), 0);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(b, 8, 0);
-        lv_obj_set_style_margin_ver(b, 6, 0);
-        lv_obj_set_style_text_font(b, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(b, theme::text_muted(), 0);
-        lv_obj_set_style_border_width(b, 0, 0);
-        lv_obj_set_style_bg_color(b, theme::teal(), LV_STATE_CHECKED);
-        lv_obj_set_style_text_color(b, theme::text(), LV_STATE_CHECKED);
-        lv_obj_set_style_border_width(b, 0, LV_STATE_CHECKED);
-    }
+// Segmented tabs drive the tabview; swiping the tabview drives the tabs.
+static void seg_cb(lv_event_t* e) {
+    uint32_t sel = lv_buttonmatrix_get_selected_button((lv_obj_t*)lv_event_get_target(e));
+    if (sel < 4) lv_tabview_set_active(s_tabview, sel, LV_ANIM_ON);
+}
+static void tabview_cb(lv_event_t*) {
+    lv_buttonmatrix_set_button_ctrl(s_seg, lv_tabview_get_tab_active(s_tabview), LV_BUTTONMATRIX_CTRL_CHECKED);
 }
 
 void ui_panel_create() {
@@ -552,23 +908,30 @@ void ui_panel_create() {
 
     build_header(scr);
 
-    lv_obj_t* tv = lv_tabview_create(scr);
-    lv_tabview_set_tab_bar_position(tv, LV_DIR_TOP);
-    lv_tabview_set_tab_bar_size(tv, TABBAR_H);
-    lv_obj_set_size(tv, W, TABS_H);
-    lv_obj_set_pos(tv, 0, HEADER_H);
-    lv_obj_set_style_bg_color(tv, theme::bg(), 0);
-    lv_obj_set_style_bg_opa(tv, LV_OPA_COVER, 0);
+    static const char* tabs[] = {"DASH", "TRENDS", "STATION", "WIFI", ""};
+    s_seg = make_segmented(scr, tabs, &lv_font_montserrat_18, 10);
+    lv_obj_set_size(s_seg, W - 2 * GAP, SEG_H - 6);
+    lv_obj_set_pos(s_seg, GAP, HEADER_H);
+    lv_obj_add_event_cb(s_seg, seg_cb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    lv_obj_t* dash = lv_tabview_add_tab(tv, "DASH");
-    lv_obj_t* trends = lv_tabview_add_tab(tv, "TRENDS");
-    lv_obj_t* station = lv_tabview_add_tab(tv, "STATION");
-    lv_obj_t* wifi = lv_tabview_add_tab(tv, "WIFI");
+    // Tabview for the pages + swipe; its own tab bar is hidden.
+    s_tabview = lv_tabview_create(scr);
+    lv_tabview_set_tab_bar_size(s_tabview, 0);
+    lv_obj_add_flag(lv_tabview_get_tab_bar(s_tabview), LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(s_tabview, W, BODY_H);
+    lv_obj_set_pos(s_tabview, 0, HEADER_H + SEG_H);
+    lv_obj_set_style_bg_color(s_tabview, theme::bg(), 0);
+    lv_obj_set_style_bg_opa(s_tabview, LV_OPA_COVER, 0);
+    lv_obj_add_event_cb(s_tabview, tabview_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    lv_obj_t* dash = lv_tabview_add_tab(s_tabview, "DASH");
+    lv_obj_t* trends = lv_tabview_add_tab(s_tabview, "TRENDS");
+    lv_obj_t* station = lv_tabview_add_tab(s_tabview, "STATION");
+    lv_obj_t* wifi = lv_tabview_add_tab(s_tabview, "WIFI");
     for (lv_obj_t* p : {dash, trends, station, wifi}) {
         lv_obj_set_style_pad_all(p, 0, 0);
         lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
     }
-    style_tab_bar(tv);
 
     build_dashboard(dash);
     build_trends(trends);

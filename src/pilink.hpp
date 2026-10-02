@@ -19,6 +19,7 @@ struct PiStatus {
     char drone[12];   // grounded | ascending | airborne | descending
     int  batt;        // %
     float alt;        // m
+    float tgt;        // target altitude, m
     float tether;     // kg
     char power[10];   // tether | battery
     char autoland[8]; // armed | off

@@ -2,18 +2,19 @@
 //
 // Layout:
 //   header   — brand, PI link indicator, system status pill
-//   tab bar  — DASH | TRENDS | STATION | WIFI (tap; swipe also works)
+//   tabs     — segmented DASH | TRENDS | STATION | WIFI (tap; swipe also works)
 //   body     — DASH: 3x3 metric tiles, each with value + 5-minute sparkline
-//              TRENDS: pick a metric, last hour as a large chart
-//              STATION: ground-station status from the Pi
+//              TRENDS: pick a metric, last hour as a large chart; the LAYOUT
+//                      button cycles three selector designs (chips/list/groups)
+//              STATION: drone state, altitude/battery/tether gauges, host/IP
 //              WIFI: QR code to join the ground-station WiFi
 //   footer   — full-width SAFETY LAND NOW hold-to-confirm button
 #pragma once
 
 #include "theme.hpp"
 
-// Dashboard metrics, in tile order (row-major, 3x3).
-enum class Metric { WIND, GUST, RAIN, TEMP, HUM, PRES, LUX, BATT, TETHER, COUNT };
+// Metrics, in tile order (row-major, 3x3); ALT is trends-only.
+enum class Metric { WIND, GUST, RAIN, TEMP, HUM, PRES, LUX, BATT, TETHER, ALT, COUNT };
 
 void ui_panel_create();
 
@@ -27,8 +28,21 @@ void ui_panel_set_status(const char* text, theme::Sev sev);
 // Header "PI" indicator: is the ground station (USB link) talking to us?
 void ui_panel_set_link(bool online);
 
-// STATION tab: multi-line text block + severity accent.
-void ui_panel_set_station(const char* text, theme::Sev sev);
+// STATION tab content (from the Pi's status; online=false shows PI OFFLINE).
+struct StationView {
+    bool online;
+    theme::Sev sys;
+    const char* drone;      // grounded | ascending | airborne | descending
+    const char* power;      // tether | battery
+    bool autoland;
+    const char* host;
+    const char* ip;
+    const char* msg;        // top alert, may be ""
+    float alt, tgt;         // m
+    int batt;               // %
+    float tether;           // kg
+};
+void ui_panel_set_station(const StationView& v);
 
 // WiFi join info for the WIFI tab. qr_data is a WIFI: URI.
 void ui_panel_set_wifi(const char* ssid, const char* password, const char* qr_data);
